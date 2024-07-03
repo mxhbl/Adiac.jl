@@ -1,8 +1,3 @@
-using ForwardDiff
-using LinearAlgebra
-using QuadGK, StaticArrays
-
-using Roly
 
 function map_potentials(bond_potential::Function, p::Polyform, geometries::AbstractVector{<:PolygonGeometry}; energy_kwargs...)
     # TODO: Optimize

@@ -1,5 +1,3 @@
-using Convex, SCS
-
 function preprocess_optimization(M, idxs)
     """Removes all structures that contain bonds or particles not present in the desired structures"""
     n_structs, n_pars = size(M)

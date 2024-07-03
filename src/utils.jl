@@ -1,6 +1,3 @@
-using StaticArrays, Graphs
-using Roly
-
 normal_vec(x::SVector{2,F}) where F = SVector{2,F}(-x[2], x[1])
 
 function rotate(x, ϕ)

@@ -1,5 +1,3 @@
-using LinearAlgebra, LogExpFunctions, NonlinearSolve, Statistics
-
 function logdensities(ξ, M, Zs)
     log_ρs = M * ξ .+ log.(Zs)
     return log_ρs

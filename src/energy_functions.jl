@@ -1,5 +1,3 @@
-using Roly
-
 # TODO: make this independent of Roly types
 function twospring_bond(
     xi::Roly.Point, 

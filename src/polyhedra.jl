@@ -1,5 +1,3 @@
-using CDDLib, Polyhedra
-
 function check_euler(fs)
     return sum(f * (-1)^i for (i, f) in enumerate(fs))
 end
