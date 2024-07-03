@@ -1,0 +1,17 @@
+name = "Adiac"
+uuid = "4db6b81b-e92b-451b-bd69-17439f27fa41"
+authors = ["Maximilian HUEBL <maximilian.huebl@ist.ac.at>"]
+version = "0.1.0"
+
+[deps]
+CDDLib = "3391f64e-dcde-5f30-b752-e11513730f60"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LogExpFunctions = "2ab3a3ac-af41-5b50-aa03-7779005ae688"
+NautyGraphs = "7509a0a4-015a-4167-b44b-0799a1a2605e"
+NonlinearSolve = "8913a72c-1f9b-4ce2-8d82-65094dcecaec"
+Polyhedra = "67491407-f73d-577b-9b50-8179a7c68029"
+QuadGK = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
+Roly = "1621a601-f9d4-49dc-b032-1328811fec3a"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
