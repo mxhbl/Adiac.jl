@@ -5,7 +5,7 @@ function is_related(ΔM)
     return (abs(ds[1]) == 1 && length(ds) == 2 && all(ds .== ds[1])) ? ds[1] : 0
 end
 
-function monoadd_kinetics(M, ξ)
+function monoadd_kinetics(M, ξ, ψ)
     nstr, _ = size(M)
     T = spzeros(eltype(ξ), nstr, nstr)
 
@@ -21,9 +21,9 @@ function monoadd_kinetics(M, ξ)
         @views μ, ε = ξ[ΔM .== relation]
         if relation == 1
             T[i, j] = exp(μ)
-            T[j, i] = exp(-ε)
+            T[j, i] = exp(-ε) #+ ψ[i]
         else
-            T[i, j] = exp(-ε)
+            T[i, j] = exp(-ε) #+ ψ[j]
             T[j, i] = exp(μ)
         end
     end
@@ -31,6 +31,7 @@ function monoadd_kinetics(M, ξ)
     T -= spdiagm(vec(sum(T, dims=1)))
     return T
 end
+monoadd_kinetics(M, ξ) = monoadd_kinetics(M, ξ, zeros(eltype(ξ), size(M, 1)))
 
 function stat_dist(T; thresh=1e-12)
     decomp, _ = partialschur(T, nev=2, which=:LR)
