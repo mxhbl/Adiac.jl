@@ -35,9 +35,7 @@ function singleton_sets(M; verbose=false)
     return designable_strs
 end
 
-function count_faces(M; verbose=true, compute_diagram=false, thresh=1e-10)
-    n_structs, d = size(M)
-
+function rays(M; verbose=true)
     p = composition_polyhedron(M)
 
     if verbose
@@ -52,10 +50,17 @@ function count_faces(M; verbose=true, compute_diagram=false, thresh=1e-10)
 
     v = vrep(p)
     v = MixedMatVRep(v)
-    
-    R = v.R
-    n_rays = size(R, 1)
-    incidences = abs.(M * R') .< thresh
+    R = permutedims(v.R)
+    R ./= sqrt.(sum(R .^ 2, dims=1))
+    return R
+end
+
+function count_faces(M; verbose=true, compute_diagram=false, thresh=1e-10)
+    n_structs, d = size(M)
+
+    R = rays(M; verbose=verbose)
+    n_rays = size(R, 2)
+    incidences = abs.(M * R) .< thresh
 
     fs = [1; n_rays; zeros(Int64, d + 1 - 2)]
     sets = BitMatrix[trues(n_structs, 1), incidences]
