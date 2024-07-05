@@ -2,7 +2,8 @@ normal_vec(x::SVector{2,F}) where F = SVector{2,F}(-x[2], x[1])
 
 function rotate(x, ϕ)
     c, s = cospi(ϕ), sinpi(ϕ)
-    return Roly.Point{2}(c * x[1] - s * x[2], s * x[1] + c * x[2])
+    #TODO performance!
+    return typeof(x)([c * x[1] - s * x[2], s * x[1] + c * x[2]])
 end
 
 function flatten_coords(xs, ψs)

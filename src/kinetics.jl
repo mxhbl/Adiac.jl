@@ -44,3 +44,12 @@ end
 
 function massaction_kinetics(M)
 end
+
+#TODO move this to the appropriate place
+function moment_sum(p::Polyform, χ)
+    χ_tot = zeros(eltype(χ), 2)
+    for (species, ψ) in zip(p.species, p.ψs)
+        χ_tot += Adiac.rotate(χ[:, species], ψ.θ)
+    end
+    return χ_tot
+end
