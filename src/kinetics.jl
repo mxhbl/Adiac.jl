@@ -1,30 +1,35 @@
 using SparseArrays, ArnoldiMethod
 
-function is_related(ΔM)
-    ds = @view ΔM[ΔM .!= 0]
-    return (abs(ds[1]) == 1 && length(ds) == 2 && all(ds .== ds[1])) ? ds[1] : 0
+function n_species(M::AbstractMatrix)
+    nμ = 0
+    while sum(M[nμ + 1, :]) == 1
+        nμ += 1
+    end
+    return nμ
 end
 
 function monoadd_kinetics(M, ξ, ψ)
     nstr, _ = size(M)
+    nμ = n_species(M)
+
     T = spzeros(eltype(ξ), nstr, nstr)
 
     for i in axes(T, 1), j in i+1:size(T, 2)
         ΔM = M[i, :] - M[j, :]
-        relation = is_related(ΔM)
+        δμ = ΔM[1:nμ]
+        δε = ΔM[nμ+1:end]
 
-        if relation == 0
+        # if not all δε have the same sign, continue
+        if sum(abs.(δε)) != abs(sum(δε))
             continue
         end
 
-        # TODO: optimize
-        @views μ, ε = ξ[ΔM .== relation]
-        if relation == 1
-            T[i, j] = exp(μ)
-            T[j, i] = exp(-ε) #+ ψ[i]
-        else
-            T[i, j] = exp(-ε) #+ ψ[j]
-            T[j, i] = exp(μ)
+        if all(δμ .>= 0) && sum(δμ) == 1
+            T[i, j] = exp(ξ[1:nμ]' * abs.(δμ))
+            T[j, i] = exp(-ξ[nμ+1:end]' * abs.(δε))
+        elseif all(δμ .<= 0) && sum(δμ) == -1
+            T[j, i] = exp(ξ[1:nμ]' * abs.(δμ))
+            T[i, j] = exp(-ξ[nμ+1:end]' * abs.(δε))
         end
     end
 
@@ -33,8 +38,8 @@ function monoadd_kinetics(M, ξ, ψ)
 end
 monoadd_kinetics(M, ξ) = monoadd_kinetics(M, ξ, zeros(eltype(ξ), size(M, 1)))
 
-function stat_dist(T; thresh=1e-12)
-    decomp, _ = partialschur(T, nev=2, which=:LR)
+function stat_dist(T; thresh=1e-8)
+    decomp, _ = partialschur(T, nev=2, which=LR())
     @assert abs.(decomp.eigenvalues[1]) < thresh
     @assert abs.(decomp.eigenvalues[2]) > thresh
 
