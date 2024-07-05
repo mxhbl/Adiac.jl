@@ -1,6 +1,6 @@
 using SparseArrays, ArnoldiMethod
 
-function monoadd_kinetics(M, ξ, ψ)
+function monoadd_kinetics(M, ξ, ψ=nothing; vacuum=false)
     nstr, _ = size(M)
     nμ = n_species(M)
 
@@ -25,17 +25,38 @@ function monoadd_kinetics(M, ξ, ψ)
         end
     end
 
+    # TODO optimize
+    if vacuum
+        TT = spzeros(Float64, nstr+1, nstr+1)
+        TT[2:nμ+1, 1] = exp.(ξ[1:nμ])
+        TT[1, 2:nμ+1] = exp.(-ξ[1:nμ])
+        TT[2:end, 2:end] .= T
+        T = TT
+
+        if !isnothing(ψ)
+            T[1, nμ+2:end] = ψ
+        end
+    end
+
     T -= spdiagm(vec(sum(T, dims=1)))
     return T
 end
-monoadd_kinetics(M, ξ) = monoadd_kinetics(M, ξ, zeros(eltype(ξ), size(M, 1)))
 
-function stat_dist(T; thresh=1e-8)
-    decomp, _ = partialschur(T, nev=2, which=LR())
-    @assert abs.(decomp.eigenvalues[1]) < thresh
-    @assert abs.(decomp.eigenvalues[2]) > thresh
+function stat_dist(T; vacuum=false, thresh=1e-8)
+    # decomp, _ = partialschur(T, nev=2, which=LR())
+    # @assert abs.(decomp.eigenvalues[1]) < thresh
+    # println(abs.(decomp.eigenvalues))
+    # πvec = decomp.Q[:, 1]
 
-    πvec = decomp.Q[:, 1]
+    λs, V = eigen(Matrix(T)) # TODO get partialschur to work
+    @assert abs.(λs[end]) < thresh
+    πvec = V[:, end]
+    println(abs.(λs[end-1:end]))
+
+    if vacuum
+        πvec = πvec[2:end]
+    end
+
     return πvec / sum(πvec)
 end
 
@@ -49,4 +70,7 @@ function moment_sum(p::Polyform, χ)
         χ_tot += Adiac.rotate(χ[:, species], ψ.θ)
     end
     return χ_tot
+end
+function breakup_rates(strs::AbstractVector{<:Polyform}, χ)
+    return [norm(x) for (p, x) in zip(strs, moment_sum.(strs, Ref(χ))) if size(p) > 1]
 end
