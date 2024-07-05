@@ -17,7 +17,9 @@ function preprocess_optimization(M, idxs)
     return structure_mask, element_mask, new_idxs
 end
 
-function linear_design(M, nμ, idxs; preprocess=true, refine_undesignable=true, atol=1e-6, rtol=1e-6, infval=100)
+function linear_design(M, idxs; preprocess=true, refine_undesignable=true, atol=1e-6, rtol=1e-6, infval=100)
+    nμ = n_species(M)
+
     if isa(idxs, Number)
         idxs = [idxs]
     end
@@ -71,7 +73,9 @@ function linear_design(M, nμ, idxs; preprocess=true, refine_undesignable=true, 
     return infapprox(xi_hat, infval), residual
 end
 
-function convex_design(M, nμ, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+    nμ = n_species(M)
+
     if preprocess
         structure_mask, element_mask, new_idxs = preprocess_optimization(M, [i])
         M = M[structure_mask, element_mask]
@@ -126,7 +130,9 @@ function convex_design(M, nμ, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=tr
     return infapprox(xi, infval), residual
 end
 
-function convex_multidesign(M, nμ, idxs; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+function convex_multidesign(M, idxs; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+    nμ = n_species(M)
+
     if preprocess
         structure_mask, element_mask, new_idxs = preprocess_optimization(M, idxs)
         M = M[structure_mask, element_mask]

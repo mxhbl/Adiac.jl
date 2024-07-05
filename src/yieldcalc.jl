@@ -9,6 +9,7 @@ function monomer_densities(ξ, M, nμ, Zs)
     ns = M[:, 1:nμ]
     return ns' * densities(ξ, M, Zs)
 end
+monomer_densities(ξ, M, Zs) = monomer_densities(ξ, M, n_species(M), Zs)
 
 function μs_of_ϕs(ϕs, εs, M, Zs; ε_abs=1e-6, ε_rel=1e-6)
     nμ = length(ϕs)

@@ -1,13 +1,5 @@
 using SparseArrays, ArnoldiMethod
 
-function n_species(M::AbstractMatrix)
-    nμ = 0
-    while sum(M[nμ + 1, :]) == 1
-        nμ += 1
-    end
-    return nμ
-end
-
 function monoadd_kinetics(M, ξ, ψ)
     nstr, _ = size(M)
     nμ = n_species(M)

@@ -1,3 +1,11 @@
+function n_species(M::AbstractMatrix)
+    nμ = 0
+    while sum(M[nμ + 1, :]) == 1
+        nμ += 1
+    end
+    return nμ
+end
+
 normal_vec(x::SVector{2,F}) where F = SVector{2,F}(-x[2], x[1])
 
 function rotate(x, ϕ)
