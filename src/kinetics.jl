@@ -61,7 +61,11 @@ function stat_dist(T; vacuum=false, thresh=1e-8)
 end
 
 function massaction_kinetics(M)
+
+
 end
+
+
 
 #TODO move this to the appropriate place
 function moment_sum(p::Polyform, χ)
@@ -74,3 +78,10 @@ end
 function breakup_rates(strs::AbstractVector{<:Polyform}, χ)
     return [norm(x) for (p, x) in zip(strs, moment_sum.(strs, Ref(χ))) if size(p) > 1]
 end
+
+
+M = [1 0 0;
+     0 1 0;
+     1 1 1;
+     1 2 2;
+     1 3 3]
