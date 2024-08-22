@@ -3,20 +3,21 @@ function logdensities(ξ, M, Zs)
     return log_ρs
 end
 densities(ξ, M, Zs) = exp.(logdensities(ξ, M, Zs))
-densities(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6) = densities([μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6); εs], M, Zs)
+densities(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6) = densities([μs_of_ϕs(ϕs, εs, M, Zs; atol=atol, rtol=rtol); εs], M, Zs)
 
-function monomer_densities(ξ, M, nμ, Zs)
-    ns = M[:, 1:nμ]
+function _monomer_densities(ξ, M, ns, Zs)
     return ns' * densities(ξ, M, Zs)
 end
-monomer_densities(ξ, M, Zs) = monomer_densities(ξ, M, n_species(M), Zs)
+monomer_densities(ξ, M, Zs) = _monomer_densities(ξ, M, view(M, :, 1:n_species(M)), Zs)
 
 function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6)
     nμ = length(ϕs)
-    f(u, args...) = monomer_densities([u; εs], M, nμ, Zs) - ϕs
+    ns = M[:, 1:n_species(M)]
+    f(u, args...) = _monomer_densities([u; εs], M, ns, Zs) - ϕs
+    
     init_μs = -1.5 * mean(εs) * ones(nμ)
     prob = NonlinearProblem(f, init_μs, zeros(1), abstol=atol, reltol=rtol)
-    solution = solve(prob)
+    solution = solve(prob, NewtonRaphson())
 
     if solution.retcode == ReturnCode.Success
         return Vector(solution.u)

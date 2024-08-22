@@ -3,7 +3,7 @@ module Adiac
 
 using LinearAlgebra, StaticArrays, Graphs, QuadGK, Statistics
 using Convex, SCS, CDDLib, Polyhedra
-using ForwardDiff, LogExpFunctions, NonlinearSolve
+using ForwardDiff, LogExpFunctions, NonlinearSolve, StaticArrays
 using Roly
 
 include("utils.jl")
