@@ -20,7 +20,7 @@ function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6)
     
     init_μs = -1.5 * mean(εs) * ones(nμ)
     prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
-    solution = solve(prob, NewtonRaphson())
+    solution = solve(prob)
 
     if solution.retcode == ReturnCode.Success
         return Vector(solution.u)
