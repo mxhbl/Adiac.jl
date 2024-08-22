@@ -12,11 +12,14 @@ monomer_densities(ξ, M, Zs) = _monomer_densities(ξ, M, view(M, :, 1:n_species(
 
 function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6)
     nμ = length(ϕs)
-    ns = M[:, 1:n_species(M)]
-    f(u, args...) = _monomer_densities([u; εs], M, ns, Zs) - ϕs
+    N = M[:, 1:nμ]
+    B = M[:, nμ+1:end]
+
+    f!, jac!, jvp!, vjp! = _setup_conversion(ϕs, N, B, Zs)
+    f = NonlinearFunction(f!, jac=jac!, jvp=jvp!, vjp=vjp!)
     
     init_μs = -1.5 * mean(εs) * ones(nμ)
-    prob = NonlinearProblem(f, init_μs, zeros(1), abstol=atol, reltol=rtol)
+    prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
     solution = solve(prob, NewtonRaphson())
 
     if solution.retcode == ReturnCode.Success
@@ -33,3 +36,24 @@ function logyields(ξ, M, Zs)
 end
 yields(ξ, M, Zs) = exp.(logyields(ξ, M, Zs))
 yields(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6) = yields([μs_of_ϕs(ϕs, εs, M, Zs; atol=atol, rtol=rtol); εs], M, Zs)
+
+
+function _setup_conversion(ϕs_target, N, B, Zs)
+    function f!(dϕs, μs, εs)
+        dϕs .= N' * (exp.(N * μs + B * εs) .* Zs) - ϕs_target
+        return 
+    end
+    function jac!(J, μs, εs)
+        J .=  N' * Diagonal(exp.(N * μs + B * εs) .* Zs) * N
+        return 
+    end
+    function jvp!(Jv, v, μs, εs)
+        Jv .=  N' * Diagonal(exp.(N * μs + B * εs) .* Zs) * (N * v)
+        return 
+    end
+    function vjp!(vJ, v, μs, εs)
+        jvp!(vJ, v, μs, εs)
+        return 
+    end
+    return f!, jac!, jvp!, vjp!
+end
