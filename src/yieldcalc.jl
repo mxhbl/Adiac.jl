@@ -52,7 +52,7 @@ function _setup_conversion(ϕs_target, N, B, Zs)
         return 
     end
     function vjp!(vJ, v, μs, εs)
-        vJ .= (v * N') * Diagonal(exp.(N * μs + B * εs) .* Zs) * N
+        vJ .= (N * v)' * Diagonal(exp.(N * μs + B * εs) .* Zs) * N
         return 
     end
     return f!, jac!, jvp!, vjp!
