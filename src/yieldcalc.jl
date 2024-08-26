@@ -52,7 +52,7 @@ function _setup_conversion(ϕs_target, N, B, Zs)
         return 
     end
     function vjp!(vJ, v, μs, εs)
-        jvp!(vJ, v, μs, εs)
+        jvp!(vJ, v, μs, εs)'
         return 
     end
     return f!, jac!, jvp!, vjp!
