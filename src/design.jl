@@ -61,7 +61,7 @@ function linear_design(M, idxs; preprocess=true, refine_undesignable=true, atol=
     if refine_undesignable && !isempty(chimeras)
         @warn "Target set is not designable, optimizing for minimal enclosing designable set..."
         extended_idxs = union(idxs, chimeras)
-        xi_hat, residual = linear_design(M, nμ, extended_idxs; preprocess=false)
+        xi_hat, residual = linear_design(M, extended_idxs; preprocess=false)
     end
 
     if preprocess
