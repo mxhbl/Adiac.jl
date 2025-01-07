@@ -40,6 +40,7 @@ function composition(p::Polyform, assembly_system::AssemblySystem)
     for s in spcs
         m[s] += 1
     end
+
     es = Graphs.edges(p.anatomy)
     double_bonds = [e for e in es if reverse(e) in es]
     bonds = []
@@ -49,33 +50,16 @@ function composition(p::Polyform, assembly_system::AssemblySystem)
         end
     end
 
-    # TODO: optimize and simplify
-    intmat_idxs = findall(Roly.intmat(assembly_system))
-    filter!(x->x[1] <= x[2], intmat_idxs)
-    bond_idxs = []
+    bondlist = findall(Roly.intmat(assembly_system))
+    filter!(x->x[1] <= x[2], bondlist)
+    sort!(bondlist)
+    
     for b in bonds
-        spcs1 = Roly.species(p)[p.encoder.bwd[b.src][1]]
-        site1 = p.encoder.bwd[b.src][2]
-        i = Roly.spcs_site_to_siteidx(spcs1, site1, assembly_system)
-
-        spcs2 = Roly.species(p)[p.encoder.bwd[b.dst][1]]
-        site2 = p.encoder.bwd[b.dst][2]
-        j = Roly.spcs_site_to_siteidx(spcs2, site2, assembly_system)
-
-        if i > j
-            k = i
-            i = j
-            j = k
-        end
-
-        push!(bond_idxs, findfirst(x-> x==CartesianIndex(i, j), intmat_idxs))
+        lsrc, ldst = sort([p.anatomy.labels[b.src], p.anatomy.labels[b.dst]])
+        i = findfirst(x->x==CartesianIndex(lsrc, ldst), bondlist)
+        m[n + i] += 1
     end
-    for bi in bond_idxs
-        if isnothing(bi)
-            continue
-        end
-        m[n + bi] += 1
-    end
+
     return m
 end
 compositions(ps::AbstractVector{<:Polyform}, sys::AssemblySystem) = reduce(vcat, composition.(ps, Ref(sys))')
