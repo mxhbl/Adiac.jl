@@ -1,87 +1,192 @@
-using SparseArrays, ArnoldiMethod
+using StatsBase, Random, NautyGraphs, Graphs
 
-function monoadd_kinetics(M, ξ, ψ=nothing; vacuum=false)
-    nstr, _ = size(M)
-    nμ = n_species(M)
+function cleave(anatomy::AbstractGraph, edge)
+    revedge = reverse(edge)
+    if revedge ∉ edges(anatomy)
+        error("Cannot cleave a nondirected (interior) edge.")
+    end
 
-    T = spzeros(eltype(ξ), nstr, nstr)
+    anatomy = copy(anatomy)
 
-    for i in axes(T, 1), j in i+1:size(T, 2)
-        ΔM = M[i, :] - M[j, :]
-        δμ = ΔM[1:nμ]
-        δε = ΔM[nμ+1:end]
+    rem_edge!(anatomy, edge)
+    rem_edge!(anatomy, revedge)
 
-        # if not all δε have the same sign, continue
-        if sum(abs.(δε)) != abs(sum(δε))
-            continue
+    gs = NautyDiGraph[]
+    comps = connected_components(anatomy)
+    for comp in comps
+        g = anatomy[comp]
+        @views g.labels = anatomy.labels[comp]
+        push!(gs, g)
+    end    
+    return anatomy, gs, comps
+end
+
+function list_reactions(strs)
+    gs = [s.anatomy for s in strs]
+    ids = Dict(ghash(g)=>i for (i, g) in enumerate(gs))
+
+    reactions = NTuple{3,Int}[] # reactions in the form i, j <--> k
+    bondbreaks = []
+
+    for g in gs
+        gid = ids[ghash(g)]
+        es = edges(g)
+        used_edges = []
+
+        for e in es
+            reverse(e) ∉ es && continue
+
+            gcleave, parts, _ = cleave(g, e)
+
+            if length(parts) == 1
+                v1, v2 = e.src, e.dst
+                es2 = edges(gcleave)
+
+                for e2 in es2
+                    (reverse(e2) ∉ es2 || e2 in used_edges) && continue
+                    gcleave2, parts2, comps = cleave(gcleave, e2)
+
+                    length(parts2) == 1 && continue
+                    (v1 ∈ comps[1] && v2 ∈ comps[1] || 
+                        v1 ∈ comps[2] && v2 ∈ comps[2]) && continue
+                    
+                    component_ids = sort([ids[ghash(parts2[1])], ids[ghash(parts2[2])]])
+                    reaction = (component_ids..., gid)
+                    push!(reactions, reaction)
+                    push!(bondbreaks, 2)
+                end
+            else
+                component_ids = sort([ids[ghash(parts[1])], ids[ghash(parts[2])]])
+                reaction = (component_ids..., gid)
+                push!(reactions, reaction)
+                push!(bondbreaks, 1)
+            end
+
+            push!(used_edges, e)
+        end
+    end
+    return reactions, bondbreaks
+end
+
+function make_kernels(reactions, agg_kernel=nothing, brk_kernel=nothing)
+    if isnothing(agg_kernel)
+        agg_kernel = (i, j) -> 1
+    end
+    if isnothing(brk_kernel)
+        brk_kernel = k -> 1
+    end
+
+    ks = [agg_kernel(i, j) for (i, j, _) in reactions]
+    fs = [brk_kernel(k) for (_, _, k) in reactions]
+    return ks, fs
+end
+
+function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
+    reactions, bondbreaks = list_reactions(strs)
+
+    ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
+
+    function update_step!(du, u, p, t)
+        α, δ = p
+        du .= 0
+
+        for r in eachindex(reactions)
+            i, j, k = reactions[r]
+            bbs = bondbreaks[r]
+
+            if i != j
+                du[i] += (-α * ks[r] * u[i] * u[j] + δ^bbs * fs[r] * u[k])
+                du[j] += (-α * ks[r] * u[i] * u[j] + δ^bbs * fs[r] * u[k])
+                du[k] += (α * ks[r] * u[i] * u[j] - δ^bbs * fs[r] * u[k])
+            else
+                du[i] += (-α * ks[r] * u[i]^2 + 2δ^bbs * fs[r] * u[k])
+                du[k] += (α * ks[r] * u[i]^2 / 2 - δ^bbs * fs[r] * u[k])
+            end
+        end
+        return
+    end
+    return update_step!
+end
+
+function stochastic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
+    reactions, bondbreaks = list_reactions(strs)
+
+    ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
+
+    function reaction_weight(r, dir, u, p)
+        i, j, k = reactions[r]
+        α, δ, V = p
+
+        if dir == 1
+            pref = i == j ? 0.5 : 1.0
+            return α / V * pref * ks[r] * u[i] * u[j]
+        elseif dir == 2
+            return δ^bondbreaks[r] * fs[r] * u[k]
+        end
+        error()
+        return 
+    end
+
+    ws = zeros(length(reactions), 2)
+
+    function update_step!(rng, u, p, t)    
+        for r in eachindex(reactions), d in (1, 2)
+            ws[r, d] = reaction_weight(r, d, u, p)
         end
 
-        if all(δμ .>= 0) && sum(δμ) == 1
-            T[i, j] = exp(ξ[1:nμ]' * abs.(δμ))
-            T[j, i] = exp(-ξ[nμ+1:end]' * abs.(δε))
-        elseif all(δμ .<= 0) && sum(δμ) == -1
-            T[j, i] = exp(ξ[1:nμ]' * abs.(δμ))
-            T[i, j] = exp(-ξ[nμ+1:end]' * abs.(δε))
+        wsum = sum(ws)
+        τ = inv(wsum) * log(inv(rand(rng)))
+
+        ci = sample(rng, vec(CartesianIndices(ws)), Weights(vec(ws), wsum))
+        r, dir = ci[1], ci[2]
+        i, j, k = reactions[r]
+        if dir == 1 
+            u[i] -= 1
+            u[j] -= 1
+            u[k] += 1
+        elseif dir == 2
+            u[i] += 1
+            u[j] += 1
+            u[k] -= 1
+        else
+            error()
+        end
+        return τ
+    end
+    return update_step!
+end
+
+function kinetic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, ctime=Ts[2]/1000)
+    step = kinetic_network(strs; agg_kernel, brk_kernel)
+
+    prob = ODEProblem(step, u0, Ts, p)
+    sol = solve(prob, Rodas5(), saveat=0:ctime:T)
+
+    ts = sol.t
+    us = reduce(hcat, sol.u)
+    return us, ts
+end
+
+function stochastic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, rng=Random.default_rng(), nsteps=100_000, cinterval=max(nsteps÷100, 1))
+    step = stochastic_network(strs; agg_kernel, brk_kernel)
+
+    ts = zeros(nsteps ÷ cinterval)
+    us = zeros(Int, length(u0), nsteps ÷ cinterval)
+
+    u = copy(u0)
+    us[:, 1] .= u
+
+    t = ts[1] = Ts[1]
+    for i in 2:nsteps
+        dt = step(rng, u, p, t)
+        t += dt
+        us[:, i] .= u
+        ts[i] = t
+        if t >= Ts[2]
+            ts = ts[1:i]
+            us = us[:, 1:i]
+            break
         end
     end
-
-    # TODO optimize
-    if vacuum
-        TT = spzeros(Float64, nstr+1, nstr+1)
-        TT[2:nμ+1, 1] = exp.(ξ[1:nμ])
-        TT[1, 2:nμ+1] = exp.(-ξ[1:nμ])
-        TT[2:end, 2:end] .= T
-        T = TT
-
-        if !isnothing(ψ)
-            T[1, nμ+2:end] = ψ
-        end
-    end
-
-    T -= spdiagm(vec(sum(T, dims=1)))
-    return T
+    return us, ts
 end
-
-function stat_dist(T; vacuum=false, thresh=1e-8)
-    # decomp, _ = partialschur(T, nev=2, which=LR())
-    # @assert abs.(decomp.eigenvalues[1]) < thresh
-    # println(abs.(decomp.eigenvalues))
-    # πvec = decomp.Q[:, 1]
-
-    λs, V = eigen(Matrix(T)) # TODO get partialschur to work
-    @assert abs.(λs[end]) < thresh
-    πvec = V[:, end]
-    println(abs.(λs[end-1:end]))
-
-    if vacuum
-        πvec = πvec[2:end]
-    end
-
-    return πvec / sum(πvec)
-end
-
-function massaction_kinetics(M)
-
-
-end
-
-
-
-#TODO move this to the appropriate place
-function moment_sum(p::Polyform, χ)
-    χ_tot = zeros(eltype(χ), 2)
-    for (species, ψ) in zip(p.species, p.ψs)
-        χ_tot += Adiac.rotate(χ[:, species], ψ.θ)
-    end
-    return χ_tot
-end
-function breakup_rates(strs::AbstractVector{<:Polyform}, χ)
-    return [norm(x) for (p, x) in zip(strs, moment_sum.(strs, Ref(χ))) if size(p) > 1]
-end
-
-
-M = [1 0 0;
-     0 1 0;
-     1 1 1;
-     1 2 2;
-     1 3 3]

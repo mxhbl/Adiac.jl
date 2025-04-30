@@ -20,5 +20,6 @@ export composition, compositions
 export polyform_hessian, entropy
 export singleton_sets, count_faces
 export monoadd_kinetics
+export kinetic_simulate, stochastic_simulate
 
 end
