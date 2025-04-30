@@ -1,4 +1,3 @@
-using StatsBase, Random, NautyGraphs, Graphs
 
 function cleave(anatomy::AbstractGraph, edge)
     revedge = reverse(edge)
