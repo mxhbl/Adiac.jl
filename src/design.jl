@@ -110,6 +110,10 @@ function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, m
         problem = minimize(c,
                            phi <= log(max_ϕ),
                            sum(x[(nμ + 1):end]) == max_ε * (npars - nμ))
+        # NORM CONSTRAINT + NEGATIVE MUS
+        # problem = minimize(c,
+        #                    norm(x) <= max_ε,
+        #                    x[1:nμ] <= 0)
         Convex.solve!(problem,
                Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,
                                                   "eps_abs" => atol, "eps_rel" => rtol,
@@ -132,61 +136,37 @@ end
 
 function convex_multidesign(M, idxs; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
     nμ = n_species(M)
+    npars = size(M, 2)
 
-    if preprocess
-        structure_mask, element_mask, new_idxs = preprocess_optimization(M, idxs)
-        M = M[structure_mask, element_mask]
-        idxs = new_idxs
-        i = first(idxs)
+    i = first(idxs)
+    j = idxs[2]
+    x = Variable(npars)
+    A = M .- M[i, :]'
+    A = A[1:end .!= i, :]
+    s = σs[i] ./ σs[1:end .!= i]
+    ns = sum(M[:, 1:nμ]; dims=2)
 
-        missing_pars = findall(.!element_mask)
-        if !isempty(missing_pars)
-            nμ = nμ - sum(missing_pars .<= nμ)
-        end
-    end
-
-    nstructs, npars = size(M)
-
-    if isnothing(σs)
-        σs = ones(nstructs)
-    elseif preprocess
-        σs = σs[structure_mask]
-    end
-
-    if npars > 1
-        x = Variable(npars)
-        t = Variable(1)
-        A = M .- M[i, :]'
-        A = A[1:end .!= i, :]
-        s = σs[i] ./ σs[1:end .!= i]
-        ns = sum(M[:, 1:nμ]; dims=2)
-
-        # problem = minimize(Convex.logsumexp(A * x + log.(s)),
-        #                    Convex.logsumexp(M * x - log.(σs) + log.(ns)) <= log(max_ϕ),
-        #                    sum(x[(nμ + 1):end]) == max_ε * (npars - nμ))
-        c = Convex.logsumexp(A * x + log.(s))
-        phi = Convex.logsumexp(M * x - log.(σs) + log.(ns))
-        problem = minimize(c,
-                           phi <= log(max_ϕ),
-                           sum(x[(nμ + 1):end]) == max_ε * (npars - nμ),
-                           M[idxs, :] * x < t,
-                           M[idxs, :] * x > t) 
-        Convex.solve!(problem,
-               Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,
-                                                  "eps_abs" => atol, "eps_rel" => rtol,
-                                                  "max_iters" => max_steps))
-        xi = vec(x.value)
-        residual = problem.optval
-    else
-        xi = [0.0]
-        residual = -Inf
-    end
-
-    if preprocess
-        for mi in missing_pars
-            insert!(xi, mi, -Inf)
-        end
-    end
+    # problem = minimize(Convex.logsumexp(A * x + log.(s)),
+    #                    Convex.logsumexp(M * x - log.(σs) + log.(ns)) <= log(max_ϕ),
+    #                    sum(x[(nμ + 1):end]) == max_ε * (npars - nμ))
+    c = Convex.logsumexp(A * x + log.(s))
+    phi = Convex.logsumexp(M * x - log.(σs) + log.(ns))
+    problem = minimize(c,
+                        phi <= log(max_ϕ),
+                        sum(x[(nμ + 1):end]) == max_ε * (npars - nμ),
+                        M[i, :]' * x == M[j, :]' * x) 
+    # NORM CONSTRAINT + NEGATIVE MUS
+    # problem = minimize(c,
+    #         norm(x) <= max_ε,
+    #         x[1:nμ] <= 0,
+    #         M[i, :]' * x == M[j, :]' * x)
+    
+    Convex.solve!(problem,
+            Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,
+                                                "eps_abs" => atol, "eps_rel" => rtol,
+                                                "max_iters" => max_steps))
+    xi = vec(x.value)
+    residual = problem.optval
 
     return infapprox(xi, infval), residual
 end

@@ -85,6 +85,10 @@ function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
 
     ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
 
+    nonzero_rs = filter(r->ks[r] ≉ 0 || fs[r] ≉ 0, eachindex(reactions))
+    reactions = reactions[nonzero_rs]
+    bondbreaks = bondbreaks[nonzero_rs]
+
     function update_step!(du, u, p, t)
         α, δ = p
         du .= 0
@@ -112,12 +116,16 @@ function stochastic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
 
     ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
 
+    nonzero_rs = filter(r->ks[r] ≉ 0 || fs[r] ≉ 0, eachindex(reactions))
+    reactions = reactions[nonzero_rs]
+    bondbreaks = bondbreaks[nonzero_rs]
+
     function reaction_weight(r, dir, u, p)
         i, j, k = reactions[r]
         α, δ, V = p
 
         if dir == 1
-            pref = i == j ? 0.5 : 1.0
+            pref = i != j ? 1.0 : (u[i] > 1 ? 0.5 : 0.0)
             return α / V * pref * ks[r] * u[i] * u[j]
         elseif dir == 2
             return δ^bondbreaks[r] * fs[r] * u[k]
@@ -155,11 +163,11 @@ function stochastic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
     return update_step!
 end
 
-function kinetic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, ctime=Ts[2]/1000)
+function kinetic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, ctime=(Ts[2] - Ts[1])/1000)
     step = kinetic_network(strs; agg_kernel, brk_kernel)
 
     prob = ODEProblem(step, u0, Ts, p)
-    sol = solve(prob, Rodas5(), saveat=0:ctime:T)
+    sol = solve(prob, Rodas5(), saveat=Ts[1]:ctime:Ts[2])
 
     ts = sol.t
     us = reduce(hcat, sol.u)
@@ -179,11 +187,13 @@ function stochastic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=not
     for i in 2:nsteps
         dt = step(rng, u, p, t)
         t += dt
-        us[:, i] .= u
-        ts[i] = t
+        if i % cinterval == 0
+            us[:, i÷cinterval] .= u
+            ts[i÷cinterval] = t
+        end
         if t >= Ts[2]
-            ts = ts[1:i]
-            us = us[:, 1:i]
+            ts = ts[1:i÷cinterval]
+            us = us[:, 1:i÷cinterval]
             break
         end
     end

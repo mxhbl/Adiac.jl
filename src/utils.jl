@@ -1,6 +1,7 @@
 function n_species(M::AbstractMatrix)
+    rows = sort(eachrow(M), by=sum)
     nμ = 0
-    while sum(M[nμ + 1, :]) == 1
+    while sum(rows[nμ+1]) == 1
         nμ += 1
     end
     return nμ
