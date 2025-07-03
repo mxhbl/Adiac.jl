@@ -122,23 +122,26 @@ function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
 end
 
 function stochastic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
-    reactions, bondbreaks = list_reactions(strs)
+    reactions, bondbreaks, symfacs = list_reactions(strs)
 
     ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
 
     nonzero_rs = filter(r->ks[r] ≉ 0 || fs[r] ≉ 0, eachindex(reactions))
     reactions = reactions[nonzero_rs]
     bondbreaks = bondbreaks[nonzero_rs]
+    symfacs = symfacs[nonzero_rs]
 
     function reaction_weight(r, dir, u, p)
         i, j, k = reactions[r]
+        bbs = bondbreaks[r]
+        sym = symfacs[r]
         α, δ, V = p
 
         if dir == 1
             pref = i != j ? 1.0 : (u[i] > 1 ? 0.5 : 0.0)
-            return α / V * pref * ks[r] * u[i] * u[j]
+            return α / V * pref * ks[r] * u[i] * u[j] * sym
         elseif dir == 2
-            return δ^bondbreaks[r] * fs[r] * u[k]
+            return δ^bbs * fs[r] * u[k]
         end
         error()
         return 
