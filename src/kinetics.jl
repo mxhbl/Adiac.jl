@@ -20,29 +20,30 @@ function cleave(anatomy::AbstractGraph, edge)
     return anatomy, gs, comps
 end
 
+function interior_edges(anatomy)
+    return filter!(e->(e.src >= e.dst) && reverse(e)∈edges(anatomy), edges(anatomy))
+end
+
 function list_reactions(strs)
     gs = [s.anatomy for s in strs]
     ids = Dict(ghash(g)=>i for (i, g) in enumerate(gs))
 
     reactions = NTuple{3,Int}[] # reactions in the form i, j <--> k
-    bondbreaks = []
+    bondbreaks = Int[]
+    symfacs = Float64[]
 
     for g in gs
         gid = ids[ghash(g)]
-        es = edges(g)
         used_edges = []
 
-        for e in es
-            reverse(e) ∉ es && continue
-
+        for e in interior_edges(g)
             gcleave, parts, _ = cleave(g, e)
 
             if length(parts) == 1
                 v1, v2 = e.src, e.dst
-                es2 = edges(gcleave)
 
-                for e2 in es2
-                    (reverse(e2) ∉ es2 || e2 in used_edges) && continue
+                for e2 in interior_edges(gcleave)
+                    e2 in used_edges && continue
                     gcleave2, parts2, comps = cleave(gcleave, e2)
 
                     length(parts2) == 1 && continue
@@ -53,18 +54,25 @@ function list_reactions(strs)
                     reaction = (component_ids..., gid)
                     push!(reactions, reaction)
                     push!(bondbreaks, 2)
+
+                    symfac = (reaction[1] == reaction[2] ? 2 : 1) / strs[gid].σ
+                    push!(symfacs, symfac)
                 end
             else
                 component_ids = sort([ids[ghash(parts[1])], ids[ghash(parts[2])]])
                 reaction = (component_ids..., gid)
                 push!(reactions, reaction)
                 push!(bondbreaks, 1)
+
+                symfac = (reaction[1] == reaction[2] ? 2 : 1) / strs[gid].σ
+                push!(symfacs, symfac)
             end
+
 
             push!(used_edges, e)
         end
     end
-    return reactions, bondbreaks
+    return reactions, bondbreaks, symfacs
 end
 
 function make_kernels(reactions, agg_kernel=nothing, brk_kernel=nothing)
@@ -81,13 +89,14 @@ function make_kernels(reactions, agg_kernel=nothing, brk_kernel=nothing)
 end
 
 function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
-    reactions, bondbreaks = list_reactions(strs)
+    reactions, bondbreaks, symfacs = list_reactions(strs)
 
     ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
 
     nonzero_rs = filter(r->ks[r] ≉ 0 || fs[r] ≉ 0, eachindex(reactions))
     reactions = reactions[nonzero_rs]
     bondbreaks = bondbreaks[nonzero_rs]
+    symfacs = symfacs[nonzero_rs]
 
     function update_step!(du, u, p, t)
         α, δ = p
@@ -96,14 +105,15 @@ function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
         for r in eachindex(reactions)
             i, j, k = reactions[r]
             bbs = bondbreaks[r]
+            sym = symfacs[r]
 
             if i != j
-                du[i] += (-α * ks[r] * u[i] * u[j] + δ^bbs * fs[r] * u[k])
-                du[j] += (-α * ks[r] * u[i] * u[j] + δ^bbs * fs[r] * u[k])
-                du[k] += (α * ks[r] * u[i] * u[j] - δ^bbs * fs[r] * u[k])
+                du[i] += (-α * ks[r] * u[i] * u[j] * sym + δ^bbs * fs[r] * u[k])
+                du[j] += (-α * ks[r] * u[i] * u[j] * sym + δ^bbs * fs[r] * u[k])
+                du[k] += (α * ks[r] * u[i] * u[j] * sym - δ^bbs * fs[r] * u[k])
             else
-                du[i] += (-α * ks[r] * u[i]^2 + 2δ^bbs * fs[r] * u[k])
-                du[k] += (α * ks[r] * u[i]^2 / 2 - δ^bbs * fs[r] * u[k])
+                du[i] += (-2α * ks[r] * u[i]^2 * sym + 2δ^bbs * fs[r] * u[k])
+                du[k] += (α * ks[r] * u[i]^2 * sym - δ^bbs * fs[r] * u[k])
             end
         end
         return
@@ -167,7 +177,7 @@ function kinetic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothin
     step = kinetic_network(strs; agg_kernel, brk_kernel)
 
     prob = ODEProblem(step, u0, Ts, p)
-    sol = solve(prob, Rodas5(), saveat=Ts[1]:ctime:Ts[2])
+    sol = solve(prob, Rodas5(), saveat=[0; 1e-3; ctime:ctime:Ts[2]])
 
     ts = sol.t
     us = reduce(hcat, sol.u)
