@@ -55,7 +55,7 @@ function list_reactions(strs)
                     push!(reactions, reaction)
                     push!(bondbreaks, 2)
 
-                    symfac = (reaction[1] == reaction[2] ? 2 : 1) / strs[gid].σ
+                    symfac = inv(strs[gid].σ)
                     push!(symfacs, symfac)
                 end
             else
@@ -64,7 +64,7 @@ function list_reactions(strs)
                 push!(reactions, reaction)
                 push!(bondbreaks, 1)
 
-                symfac = (reaction[1] == reaction[2] ? 2 : 1) / strs[gid].σ
+                symfac = inv(strs[gid].σ)
                 push!(symfacs, symfac)
             end
 
@@ -112,8 +112,8 @@ function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
                 du[j] += (-α * ks[r] * u[i] * u[j] * sym + δ^bbs * fs[r] * u[k])
                 du[k] += (α * ks[r] * u[i] * u[j] * sym - δ^bbs * fs[r] * u[k])
             else
-                du[i] += (-α * ks[r] * u[i]^2 * sym + 2δ^bbs * fs[r] * u[k])
-                du[k] += (α * ks[r] * u[i]^2 * sym / 2 - δ^bbs * fs[r] * u[k])
+                du[i] += (-2α * ks[r] * u[i]^2 * sym + 2δ^bbs * fs[r] * u[k])
+                du[k] += (α * ks[r] * u[i]^2 * sym - δ^bbs * fs[r] * u[k])
             end
         end
         return
@@ -138,7 +138,7 @@ function stochastic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
         α, δ, V = p
 
         if dir == 1
-            pref = i != j ? 1.0 : (u[i] > 1 ? 0.5 : 0.0)
+            pref = i != j ? 1.0 : (u[i] > 1 ? 1.0 : 0.0)
             return α / V * pref * ks[r] * u[i] * u[j] * sym
         elseif dir == 2
             return δ^bbs * fs[r] * u[k]
