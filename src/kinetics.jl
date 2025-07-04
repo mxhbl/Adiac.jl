@@ -112,8 +112,8 @@ function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
                 du[j] += (-α * ks[r] * u[i] * u[j] * sym + δ^bbs * fs[r] * u[k])
                 du[k] += (α * ks[r] * u[i] * u[j] * sym - δ^bbs * fs[r] * u[k])
             else
-                du[i] += (-2α * ks[r] * u[i]^2 * sym + 2δ^bbs * fs[r] * u[k])
-                du[k] += (α * ks[r] * u[i]^2 * sym - δ^bbs * fs[r] * u[k])
+                du[i] += (-α * ks[r] * u[i]^2 * sym + 2δ^bbs * fs[r] * u[k])
+                du[k] += (α * ks[r] * u[i]^2 * sym / 2 - δ^bbs * fs[r] * u[k])
             end
         end
         return
