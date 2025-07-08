@@ -1,14 +1,16 @@
 
-function cleave(anatomy::AbstractGraph, edge)
-    revedge = reverse(edge)
-    if revedge ∉ edges(anatomy)
-        error("Cannot cleave a nondirected (interior) edge.")
+function cleave(anatomy::AbstractGraph, es::Vector{<:AbstractEdge})
+    for edge in es
+        revedge = reverse(edge)
+        if revedge ∉ edges(anatomy)
+            error("Cannot cleave a nondirected (interior) edge.")
+        end
+
+        anatomy = copy(anatomy)
+
+        rem_edge!(anatomy, edge)
+        rem_edge!(anatomy, revedge)
     end
-
-    anatomy = copy(anatomy)
-
-    rem_edge!(anatomy, edge)
-    rem_edge!(anatomy, revedge)
 
     gs = NautyDiGraph[]
     comps = connected_components(anatomy)
@@ -19,11 +21,16 @@ function cleave(anatomy::AbstractGraph, edge)
     end    
     return anatomy, gs, comps
 end
+cleave(anatomy::AbstractGraph, edge::AbstractEdge) = cleave(anatomy, [edge])
 
-function interior_edges(anatomy)
+
+function exterior_edges(anatomy)
     return filter!(e->(e.src >= e.dst) && reverse(e)∈edges(anatomy), edges(anatomy))
 end
 
+
+# THIS is equivalent to the cut-set problem:
+# Enumerate all cut-sets with fewer than M elements
 function list_reactions(strs)
     gs = [s.anatomy for s in strs]
     ids = Dict(ghash(g)=>i for (i, g) in enumerate(gs))
@@ -36,13 +43,13 @@ function list_reactions(strs)
         gid = ids[ghash(g)]
         used_edges = []
 
-        for e in interior_edges(g)
+        for e in exterior_edges(g)
             gcleave, parts, _ = cleave(g, e)
 
             if length(parts) == 1
                 v1, v2 = e.src, e.dst
 
-                for e2 in interior_edges(gcleave)
+                for e2 in exterior_edges(gcleave)
                     e2 in used_edges && continue
                     gcleave2, parts2, comps = cleave(gcleave, e2)
 
@@ -73,6 +80,96 @@ function list_reactions(strs)
         end
     end
     return reactions, bondbreaks, symfacs
+end
+
+function generate_reactionnetwork(strs, assembly_system; maxlevel)
+    gs = [s.anatomy for s in strs]
+    ids = Dict(ghash(g)=>i for (i, g) in enumerate(gs))
+
+    M = compositions(strs, assembly_system)
+    B = M[:, size(assembly_system)[1]+1:end]
+
+    reactions = NTuple{3,Int}[] # reactions in the form i, j <--> k
+    bonds= Vector{Int}[]
+    symmetry_factors = Float64[]
+
+    for g in gs
+        graph_reacts = generate_reactions(g; maxlevel)
+        isempty(graph_reacts) && continue
+        
+        for greact in graph_reacts
+            react = map(x->ids[ghash(x)], greact)
+            b = findall(!iszero, B[react[3], :] - B[react[1], :] - B[react[2], :])
+            symfac = inv(strs[react[3]].σ)
+
+            push!(reactions, react)
+            push!(bonds, b)
+            push!(symmetry_factors, symfac)
+        end
+    end
+    return reactions, bonds, symmetry_factors
+end
+
+function generate_reactions(g; maxlevel)
+    reactions = NTuple{3,Int}[]     # reactions in the form i, j <--> k
+    _, halfs = generate_cuts(g; maxlevel)
+    # Reaction stores graph, graph -> graph at this point
+    reactions = [(g1, g2, g) for (g1, g2) in halfs]
+    return reactions
+end
+
+
+function are_separated(vi, vj, vs1, vs2)
+    return (vi ∈ vs1 && vj ∈ vs2) || 
+           (vi ∈ vs2 && vj ∈ vs1)
+end
+
+function generate_cuts(g; maxlevel=Inf)
+    edges = exterior_edges(g)
+    cuts = Vector{eltype(edges)}[]
+    halfs = Vector{typeof(g)}[]
+
+    isempty(edges) && return cuts, halfs
+
+    current_cut = [first(edges)]
+
+    while !isempty(current_cut)
+        current_edge = current_cut[end]
+
+        # Remove all edges in the current cut and return connected components
+        _, components, component_vertices = cleave(g, current_cut)
+
+        if length(components) > 1
+            srcs = [e.src for e in current_cut]
+            dsts = [e.dst for e in current_cut]
+
+            if all(x -> are_separated(x..., component_vertices...), zip(srcs, dsts))
+                push!(cuts, copy(current_cut))
+                push!(halfs, components)
+            end
+
+            nextedge_idx = nothing # initiate a reverse traverse
+        elseif length(current_cut) == maxlevel
+            nextedge_idx = nothing # initiate a reverse traverse
+        else
+            nextedge_idx = findfirst(e->e>current_edge, edges) # TODO use searchsorted
+        end
+
+        # If no additional edge can be added to the cut, reverse traverse upward until a new
+        # branch is found
+        while isnothing(nextedge_idx)
+            isempty(current_cut) && @goto finished
+            current_edge = pop!(current_cut)
+            nextedge_idx = findfirst(e->e>current_edge, edges) # TODO use searchsorted
+        end
+
+        next_edge = edges[nextedge_idx]
+        push!(current_cut, next_edge)
+    end
+
+    @label finished
+
+    return cuts, halfs
 end
 
 function make_kernels(reactions, agg_kernel=nothing, brk_kernel=nothing)
