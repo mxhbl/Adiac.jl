@@ -28,58 +28,19 @@ function exterior_edges(anatomy)
     return filter!(e->(e.src >= e.dst) && reverse(e)∈edges(anatomy), edges(anatomy))
 end
 
+function listbonds(bondcounts)
+    # Convert bond counts, i.e. [0, 1, 0, 0, 2]
+    # into a list of bonds (with repeats), i.e. [2, 5, 5]
+    bondlist = zeros(Int, sum(bondcounts))
 
-# THIS is equivalent to the cut-set problem:
-# Enumerate all cut-sets with fewer than M elements
-function list_reactions(strs)
-    gs = [s.anatomy for s in strs]
-    ids = Dict(ghash(g)=>i for (i, g) in enumerate(gs))
-
-    reactions = NTuple{3,Int}[] # reactions in the form i, j <--> k
-    bondbreaks = Int[]
-    symfacs = Float64[]
-
-    for g in gs
-        gid = ids[ghash(g)]
-        used_edges = []
-
-        for e in exterior_edges(g)
-            gcleave, parts, _ = cleave(g, e)
-
-            if length(parts) == 1
-                v1, v2 = e.src, e.dst
-
-                for e2 in exterior_edges(gcleave)
-                    e2 in used_edges && continue
-                    gcleave2, parts2, comps = cleave(gcleave, e2)
-
-                    length(parts2) == 1 && continue
-                    (v1 ∈ comps[1] && v2 ∈ comps[1] || 
-                        v1 ∈ comps[2] && v2 ∈ comps[2]) && continue
-                    
-                    component_ids = sort([ids[ghash(parts2[1])], ids[ghash(parts2[2])]])
-                    reaction = (component_ids..., gid)
-                    push!(reactions, reaction)
-                    push!(bondbreaks, 2)
-
-                    symfac = inv(strs[gid].σ)
-                    push!(symfacs, symfac)
-                end
-            else
-                component_ids = sort([ids[ghash(parts[1])], ids[ghash(parts[2])]])
-                reaction = (component_ids..., gid)
-                push!(reactions, reaction)
-                push!(bondbreaks, 1)
-
-                symfac = inv(strs[gid].σ)
-                push!(symfacs, symfac)
-            end
-
-
-            push!(used_edges, e)
+    k = 1
+    for (i, b) in pairs(bondcounts)
+        if b > 0
+            bondlist[k:k+b-1] .= i
+            k += b
         end
     end
-    return reactions, bondbreaks, symfacs
+    return bondlist
 end
 
 function generate_reactionnetwork(strs, assembly_system; maxlevel)
@@ -90,7 +51,7 @@ function generate_reactionnetwork(strs, assembly_system; maxlevel)
     B = M[:, size(assembly_system)[1]+1:end]
 
     reactions = NTuple{3,Int}[] # reactions in the form i, j <--> k
-    bonds= Vector{Int}[]
+    bonds = Vector{Int}[]
     symmetry_factors = Float64[]
 
     for g in gs
@@ -99,7 +60,7 @@ function generate_reactionnetwork(strs, assembly_system; maxlevel)
         
         for greact in graph_reacts
             react = map(x->ids[ghash(x)], greact)
-            b = findall(!iszero, B[react[3], :] - B[react[1], :] - B[react[2], :])
+            b = listbonds(B[react[3], :] - B[react[1], :] - B[react[2], :])
             symfac = inv(strs[react[3]].σ)
 
             push!(reactions, react)
@@ -124,7 +85,7 @@ function are_separated(vi, vj, vs1, vs2)
            (vi ∈ vs2 && vj ∈ vs1)
 end
 
-function generate_cuts(g; maxlevel=Inf)
+function generate_cuts(g; maxlevel)
     edges = exterior_edges(g)
     cuts = Vector{eltype(edges)}[]
     halfs = Vector{typeof(g)}[]
@@ -133,29 +94,35 @@ function generate_cuts(g; maxlevel=Inf)
 
     current_cut = [first(edges)]
 
-    while !isempty(current_cut)
+    # Perform a depth-first backtracking search to 
+    # generate all possible cuts of length <= maxlevel
+    while true
         current_edge = current_cut[end]
 
-        # Remove all edges in the current cut and return connected components
+        # Remove all edges of the current cut from the input graph and return connected components
         _, components, component_vertices = cleave(g, current_cut)
 
         if length(components) > 1
+            # Cut was successful in separating the graph
+
+            # Check if all vertices of the cut are in different components
+            # If that is the case, add the cut to the output
             srcs = [e.src for e in current_cut]
             dsts = [e.dst for e in current_cut]
-
             if all(x -> are_separated(x..., component_vertices...), zip(srcs, dsts))
                 push!(cuts, copy(current_cut))
                 push!(halfs, components)
             end
 
-            nextedge_idx = nothing # initiate a reverse traverse
+            nextedge_idx = nothing # initiate an upward traverse
         elseif length(current_cut) == maxlevel
-            nextedge_idx = nothing # initiate a reverse traverse
+            nextedge_idx = nothing # initiate an upward traverse
         else
+            # Cut is incomplete, keep traversing downward
             nextedge_idx = findfirst(e->e>current_edge, edges) # TODO use searchsorted
         end
 
-        # If no additional edge can be added to the cut, reverse traverse upward until a new
+        # If no additional edge can be added to the cut, traverse upward until a viable
         # branch is found
         while isnothing(nextedge_idx)
             isempty(current_cut) && @goto finished
@@ -185,60 +152,65 @@ function make_kernels(reactions, agg_kernel=nothing, brk_kernel=nothing)
     return ks, fs
 end
 
-function kinetic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
-    reactions, bondbreaks, symfacs = list_reactions(strs)
+function kinetic_network(strs, assembly_system; maxbonds, agg_kernel=nothing, brk_kernel=nothing)
+    reactions, bonds, symfacs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds)
 
     ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
 
     nonzero_rs = filter(r->ks[r] ≉ 0 || fs[r] ≉ 0, eachindex(reactions))
     reactions = reactions[nonzero_rs]
-    bondbreaks = bondbreaks[nonzero_rs]
+    bonds = bonds[nonzero_rs]
     symfacs = symfacs[nonzero_rs]
 
+    rotation_factor = 1 #Roly.dimension(eltype(strs)) == 2 ? 2π : 8π^2
+
     function update_step!(du, u, p, t)
-        α, δ = p
+        α, εs = p[1], @view p[3:end]
         du .= 0
 
         for r in eachindex(reactions)
             i, j, k = reactions[r]
-            bbs = bondbreaks[r]
+            bs = bonds[r]
             sym = symfacs[r]
 
-            if i != j
-                du[i] += (-α * ks[r] * u[i] * u[j] * sym + δ^bbs * fs[r] * u[k])
-                du[j] += (-α * ks[r] * u[i] * u[j] * sym + δ^bbs * fs[r] * u[k])
-                du[k] += (α * ks[r] * u[i] * u[j] * sym - δ^bbs * fs[r] * u[k])
-            else
-                du[i] += (-2α * ks[r] * u[i]^2 * sym + 2δ^bbs * fs[r] * u[k])
-                du[k] += (α * ks[r] * u[i]^2 * sym - δ^bbs * fs[r] * u[k])
-            end
+            Ka = α * ks[r] * u[i] * u[j] * sym
+            Kb = rotation_factor * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k]
+
+            Rij = Kb - Ka # We don't need a factor of two for i == j, because we add it twice in that case!
+            Rk = Ka - Kb
+
+            du[i] += Rij
+            du[j] += Rij
+            du[k] += Rk
         end
         return
     end
     return update_step!
 end
 
-function stochastic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
-    reactions, bondbreaks, symfacs = list_reactions(strs)
+function stochastic_network(strs, assembly_system; agg_kernel=nothing, brk_kernel=nothing, maxbonds)
+    reactions, bonds, symfacs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds)
 
     ks, fs = make_kernels(reactions, agg_kernel, brk_kernel)
 
     nonzero_rs = filter(r->ks[r] ≉ 0 || fs[r] ≉ 0, eachindex(reactions))
     reactions = reactions[nonzero_rs]
-    bondbreaks = bondbreaks[nonzero_rs]
+    bonds = bonds[nonzero_rs]
     symfacs = symfacs[nonzero_rs]
 
     function reaction_weight(r, dir, u, p)
         i, j, k = reactions[r]
-        bbs = bondbreaks[r]
+        bs = bonds[r]
         sym = symfacs[r]
-        α, δ, V = p
+        α, V, εs = p[1], p[2], @view p[3:end]
+
+        δ = exp(sum(-εs[b] for b in bs))
 
         if dir == 1
             pref = i != j ? 1.0 : (u[i] > 1 ? 1.0 : 0.0)
             return α / V * pref * ks[r] * u[i] * u[j] * sym
         elseif dir == 2
-            return δ^bbs * fs[r] * u[k]
+            return δ * fs[r] * u[k]
         end
         error()
         return 
@@ -273,8 +245,8 @@ function stochastic_network(strs; agg_kernel=nothing, brk_kernel=nothing)
     return update_step!
 end
 
-function kinetic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, ctime=(Ts[2] - Ts[1])/1000)
-    step = kinetic_network(strs; agg_kernel, brk_kernel)
+function kinetic_simulate(strs, sys, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, maxbonds=Inf, ctime=(Ts[2] - Ts[1])/1000)
+    step = kinetic_network(strs, sys; agg_kernel, brk_kernel, maxbonds)
 
     prob = ODEProblem(step, u0, Ts, p)
     sol = solve(prob, Rodas5(), saveat=[0; 1e-3; ctime:ctime:Ts[2]])
@@ -284,8 +256,8 @@ function kinetic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothin
     return us, ts
 end
 
-function stochastic_simulate(strs, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, rng=Random.default_rng(), nsteps=100_000, cinterval=max(nsteps÷100, 1))
-    step = stochastic_network(strs; agg_kernel, brk_kernel)
+function stochastic_simulate(strs, assembly_system, u0, Ts, p; agg_kernel=nothing, brk_kernel=nothing, maxbonds=Inf, rng=Random.default_rng(), nsteps=100_000, cinterval=max(nsteps÷100, 1))
+    step = stochastic_network(strs, assembly_system; agg_kernel, brk_kernel, maxbonds)
 
     ts = zeros(nsteps ÷ cinterval)
     us = zeros(Int, length(u0), nsteps ÷ cinterval)
