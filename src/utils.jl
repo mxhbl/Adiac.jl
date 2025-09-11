@@ -10,18 +10,19 @@ end
 normal_vec(x::SVector{2,F}) where F = SVector{2,F}(-x[2], x[1])
 
 function rotate(x, ϕ)
-    c, s = cospi(ϕ), sinpi(ϕ)
-    #TODO performance!
-    return typeof(x)([c * x[1] - s * x[2], s * x[1] + c * x[2]])
+    s, c = sincospi(ϕ)
+    return [c * x[1] - s * x[2], s * x[1] + c * x[2]]
 end
 
-function flatten_coords(xs, ψs)
-    # TODO generalize to 3D
-    ξs = zeros(eltype(xs[1]), 2*length(xs) + length(ψs))
-    for i in eachindex(xs)
-        j = 1 + (i-1)*3
-        @views ξs[j:j+1] .= xs[i]
-        ξs[j+2] = ψs[i].θ
+function combinecoords(xs::AbstractVector{<:AbstractVector{F}}, ψs) where {F}
+    n = length(xs)
+    d = length(first(xs))
+    dr = first(ψs) isa Roly.Angle ? 1 : 4
+
+    ξs = zeros(F, d + dr, n)
+    for i in axes(ξs, 2)
+        ξs[1:d, i] .= xs[i]
+        ξs[d+1:end, i] .= Roly.value(ψs[i])
     end
     return ξs
 end

@@ -109,6 +109,7 @@ function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, m
         phi = Convex.logsumexp(M * x - log.(σs) + log.(ns))
         problem = minimize(c,
                            phi <= log(max_ϕ),
+                        #    maximum(x[nμ+1:end]) <= max_ε)
                            sum(x[(nμ + 1):end]) == max_ε * (npars - nμ))
         # NORM CONSTRAINT + NEGATIVE MUS
         # problem = minimize(c,
@@ -134,7 +135,7 @@ function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, m
     return infapprox(xi, infval), residual
 end
 
-function convex_multidesign(M, idxs; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+function convex_multidesign(M, idxs; relative_yields=ones(length(idxs)), max_ε=1, max_ϕ=1, Zs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
     nμ = n_species(M)
     npars = size(M, 2)
 
@@ -143,23 +144,17 @@ function convex_multidesign(M, idxs; max_ε=1, max_ϕ=1, σs=nothing, preprocess
     x = Variable(npars)
     A = M .- M[i, :]'
     A = A[1:end .!= i, :]
-    s = σs[i] ./ σs[1:end .!= i]
+    s = Zs[1:end .!= i] ./ Zs[i]
     ns = sum(M[:, 1:nμ]; dims=2)
+    dMs = M[[i], :] .- M[idxs[2:end], :]
+    rs = log.(relative_yields[1] .* Zs[idxs[2:end]]) .- log.(relative_yields[2:end] * Zs[i])
 
-    # problem = minimize(Convex.logsumexp(A * x + log.(s)),
-    #                    Convex.logsumexp(M * x - log.(σs) + log.(ns)) <= log(max_ϕ),
-    #                    sum(x[(nμ + 1):end]) == max_ε * (npars - nμ))
     c = Convex.logsumexp(A * x + log.(s))
-    phi = Convex.logsumexp(M * x - log.(σs) + log.(ns))
+    phi = Convex.logsumexp(M * x + log.(Zs) + log.(ns))
     problem = minimize(c,
                         phi <= log(max_ϕ),
                         sum(x[(nμ + 1):end]) == max_ε * (npars - nμ),
-                        M[i, :]' * x == M[j, :]' * x) 
-    # NORM CONSTRAINT + NEGATIVE MUS
-    # problem = minimize(c,
-    #         norm(x) <= max_ε,
-    #         x[1:nμ] <= 0,
-    #         M[i, :]' * x == M[j, :]' * x)
+                        dMs * x == rs) 
     
     Convex.solve!(problem,
             Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,

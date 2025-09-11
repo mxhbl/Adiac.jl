@@ -1,66 +1,118 @@
 
-function map_potentials(bond_potential::Function, p::Polyform, geometries::AbstractVector{<:PolygonGeometry}; energy_kwargs...)
-    # TODO: Optimize
-    A = adjacency_matrix(p.anatomy)
-    a = A .* A'
-    bond_vertices = filter(ci->ci[1]<ci[2], findall(a .> 0))
-    bonds = Tuple{Int,Int,Int,Int}[]
-    for ci in bond_vertices
-        i, si = p.encoder.bwd[ci[1]][1:2]
-        j, sj = p.encoder.bwd[ci[2]][1:2]
-        push!(bonds, (i, j, si, sj))
-    end
+function map_potentials(bond_potential::Function, p::Polyform, sys::AssemblySystem; energy_kwargs...)
+    es = exterior_edges(p.anatomy)
+    bonds = ((Roly.vertex2particle(p, sys, e.src), Roly.vertex2particle(p, sys, e.dst)) for e in es)
+    geoms = sys.geometries
+    spcs = Roly.species(p)
 
-    function energy_fn(ξs::AbstractVector{<:Real})
-        e = 0
-        for (i, j, si, sj) in bonds
-            x = 1 + (i-1) * 3
-            y = 1 + (j-1) * 3
-            e += bond_potential(SVector(ξs[x], ξs[x+1]), SVector(ξs[y], ξs[y+1]), ξs[x+2], ξs[y+2], geometries[i], geometries[j], si, sj; energy_kwargs...)
+    d = Roly.dimension(p)
+    function energy_fn(ξs::AbstractMatrix{<:Real})
+        E = 0
+        for ((i, si), (j, sj)) in bonds
+            xi, ψi = @views ξs[1:d, i], ξs[d+1:end, i]
+            xj, ψj  = @views ξs[1:d, j], ξs[d+1:end, j]
+
+            E += bond_potential(xi, xj, ψi, ψj, geoms[spcs[i]], geoms[spcs[j]], si, sj; energy_kwargs...)
         end
-        return e
+        return E
     end
 
     return energy_fn
 end
-map_potentials(bond_potential, p, geometry::PolygonGeometry; kwargs...) = map_potentials(bond_potential, p, fill(geometry, size(p)); kwargs...)
 
-function polyform_hessian(bond_potential::Function, p::Polyform, geometries::AbstractVector{<:PolygonGeometry}; regularizer::Real=1, energy_kwargs...)
-    energy_fn = map_potentials(bond_potential, p, geometries; energy_kwargs...)
-    xs0 = flatten_coords(p.xs, p.ψs)
-    H = ForwardDiff.hessian(x -> energy_fn(x) / regularizer, xs0)
+function polyform_hessian(bond_potential::Function, p::Polyform, sys::AssemblySystem;  energy_kwargs...)
+    energy_fn = map_potentials(bond_potential, p, sys; energy_kwargs...)
+    ξ0 = combinecoords(p.xs, p.ψs)
+    H = ForwardDiff.hessian(x -> energy_fn(x), ξ0)
     return H
 end
-polyform_hessian(bond_potential, p, geometries::PolygonGeometry; kwargs...) = polyform_hessian(bond_potential, p, fill(geometry, size(p)); kwargs...)
 
-function eigencoords_to_relcoords(vs::AbstractMatrix, ξs::AbstractVector, xs0::AbstractVector)
-    x_com = ξs[1:2]
-    ψ_com = ξs[3]
-    ws = ξs[4:end] # Vibrational Coords
+function comcoords2abscoords(V, ξcom, ξ0)
+    dt, n = size(ξ0)
+    if dt == 3
+        d, dr = 2, 1
+    elseif dt == 7
+        d, dr = 3, 4
+    else
+        error()
+    end
 
-    n = length(xs0)
-    xs = xs0 + vs[:, 4:end] * ws
-    xs_trans = reduce(vcat, [(rotate(SVector(xs[i], xs[i+1]), ψ_com) + x_com)..., xs[i+2] + ψ_com] for i in 1:3:n) # TODO: optimize
-    return xs_trans
+    xcom = ξcom[1:d]
+    ψcom = ξcom[d+1:d+dr]
+    ws = ξcom[d+dr+1:end] # Vibrational Coords
+
+    ξabs = @views ξ0 + reshape(V[:, d+dr+1:end] * ws, dt, n)
+    
+    for i in axes(ξabs, 2)
+        ξabs[1:d, i] .= rotate(ξabs[1:d, i], only(ψcom)) + xcom # TODO: assumes 2d
+        @views ξabs[d+1:end, i] .+= ψcom
+    end
+    return ξabs
 end
 
-function entropy(H::AbstractMatrix, xs::AbstractArray{<:Real}; atol=1e-6, regularizer::Real=1, β::Real=1, energy_kwargs...)
+function entropy(p::Polyform{D}, sys::AssemblySystem; potential=twospring_bond, atol=1e-6, potential_kwargs...) where {D}
+    dr = D == 2 ? 1 : 4
+    H = polyform_hessian(potential, p, sys; potential_kwargs...)
+    ξ0 = combinecoords(p.xs, p.ψs)
+
     λs, vs = eigen(H)
-    @assert all(abs.(λs[1:3]) / sum(H) .< atol)
-    λs *= regularizer
+    @assert all(abs.(λs[1:D+dr]) .< atol)
 
-    S_vib = 0.5 * sum(log.(2π./β./λs[4:end]))
+    S_vib = -0.5 * sum(log, λs[D+dr+1:end] / (2π); init=0)
 
-    ctransform(ξs) = eigencoords_to_relcoords(vs, ξs, xs)
-    jac(ϕ) = abs(det(ForwardDiff.jacobian(ctransform, [0.; 0.; ϕ; zeros(length(xs) - 3)])))
+    Otrans = zeros(D)
+    Ovib = zeros(length(λs) - (D+dr))
+    ctransform(ξs) = comcoords2abscoords(vs, ξs, ξ0)
+    jac2d(ψ, p) = abs(det(ForwardDiff.jacobian(ctransform, [Otrans; ψ; Ovib])))
+    function jac3d(θ, p)
+        α, β, γ = θ
+        sa, ca = sincos(α)
+        sb, cb = sincos(β)
+        sc, cc = sincos(γ)
 
-    Z_rot, err = quadgk(jac, 0, 2, atol=atol)
-    @assert err < atol
+        ψ = [ca, sa*cb, sa*sb*cc, sa*sb*sc]
+        return abs(det(ForwardDiff.jacobian(ctransform, [Otrans; ψ; Ovib]))) * sa^2 * sb
+    end
+    # Z_rot, _ = quadgk(jac, 0, 2, atol=atol)
 
-    # CAREFUL ABOUT DISTINGUISHING SYMMETRY NUMBER 
-    σ = size(p) > 1 ? p.σ : 1
+    if D == 2
+        bounds = (0, 2)
+        prob = IntegralProblem(jac2d, bounds)
+        Z_rot = solve(prob, QuadGKJL(); abstol=atol).u
+    else
+        bounds = (zeros(3), [π/2, π, 2π])
+        prob = IntegralProblem(θ->jac3d, bounds)
+        Z_rot = solve(prob, HCubatureJL(); abstol=atol).u
+    end
+
+    # # CAREFUL ABOUT DISTINGUISHING SYMMETRY NUMBER 
+    # σ = size(p) > 1 ? p.σ : 1
+    σ = p.σ
     S_rot = log(π * Z_rot / σ)
-    # S_rot = log(π * Z_rot)
     
     return S_vib, S_rot
+end
+
+function chiralcopy(g::G) where {G<:AbstractGraph}
+    n = nv(g)
+    h = G(n)
+    for e in edges(g)
+        add_edge!(h, reverse(e))
+    end
+    return h
+end
+
+function symmetrynumber3D(p::Polyform{2})
+    a = p.anatomy
+    b = chiralcopy(a)
+    n = nv(a)
+
+    A = blockdiag(a, b)
+    for i in vertices(a)
+        add_edge!(A, i, i+n)
+        add_edge!(A, i+n, i)
+    end
+
+    _, autg = nauty(A)
+    return convert(Int, autg.n)
 end

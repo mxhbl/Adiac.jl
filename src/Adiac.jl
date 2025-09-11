@@ -1,12 +1,12 @@
 module Adiac
 
 
-using LinearAlgebra, StaticArrays, NautyGraphs, Graphs, QuadGK, Statistics
+using LinearAlgebra, StaticArrays, SparseArrays, NautyGraphs, Graphs, QuadGK, Statistics
 using Convex, SCS, CDDLib, Polyhedra
 using ForwardDiff, LogExpFunctions, NonlinearSolve, StaticArrays
 using Roly
 using StatsBase, Random, OrdinaryDiffEq
-
+using Integrals
 
 include("utils.jl")
 include("yieldcalc.jl")
