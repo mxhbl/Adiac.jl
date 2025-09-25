@@ -228,10 +228,10 @@ end
 
 function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, k0=1, saveat=[])
     step = kinetic_network(sys, ξ, Zs; kernel, brkkernel, maxbonds, k0)
-    M = composition(polygen(sys), sys)
+    M = compositions(polygen(sys), sys)
 
     ϕ0 = monomer_densities(ξ, M, Zs)
-    prob = ODEProblem(step, ϕ0, Ts ./ k0, [])
+    prob = ODEProblem(step, vcat(ϕ0, zeros(size(M, 1) - length(ϕ0))), Ts ./ k0)
     sol = solve(prob, Rodas5(); saveat=saveat/k0)
 
     ts = sol.t * k0
@@ -269,7 +269,7 @@ function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbond
     strs = polygen(assembly_system)
     ns = length(strs)
 
-    reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
+    reactions, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
     M = compositions(strs, assembly_system)
 
     function Sfn!(S, ξ)
@@ -308,7 +308,7 @@ function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbond
             i, j, k = reactions[r]
 
             Ka = ks[r]
-            Kb = (ρeq[i] * ρeq[j] / ρeq[k]) * fs[r]
+            Kb = (-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[k, :] + ∂ρeq[i, :] * ρeq[j] / ρeq[k] + ∂ρeq[j, :] * ρeq[i] / ρeq[k]) * fs[r] 
 
             S[i, i, :] += -Ka * ∂ρeq[j, :] 
             S[i, j, :] += -Ka * ∂ρeq[i, :] 
