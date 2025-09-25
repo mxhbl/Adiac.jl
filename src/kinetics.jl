@@ -117,18 +117,13 @@ function make_kernels(reactions, cuts, components, aggkernel=nothing, brkkernel=
 end
 
 
-function generate_reactionnetwork(strs, assembly_system; maxlevel, aggkernel=nothing, brkkernel=nothing)
+function generate_reactionnetwork(strs; maxlevel, aggkernel=nothing, brkkernel=aggkernel)
     gs = [s.anatomy for s in strs]
     ids = Dict(ghash(g)=>i for (i, g) in enumerate(gs))
-
-    M = compositions(strs, assembly_system)
-    B = M[:, size(assembly_system)[1]+1:end]
 
     reactions = NTuple{3,Int}[] # reactions in the form i, j <--> k
     cuts = []
     components = []
-    bonds = Vector{Int}[]
-    symmetry_factors = Float64[]
 
     for g in gs
         _cuts, _components = generate_cuts(g; maxlevel)
@@ -138,12 +133,8 @@ function generate_reactionnetwork(strs, assembly_system; maxlevel, aggkernel=not
         
         for (cut, component, greact) in zip(_cuts, _components, graph_reacts)
             react = map(x->ids[ghash(x)], greact)
-            b = listbonds(B[react[3], :] - B[react[1], :] - B[react[2], :])
-            symfac = strs[react[1]].σ * strs[react[2]].σ / strs[react[3]].σ
 
             push!(reactions, react)
-            push!(bonds, b)
-            push!(symmetry_factors, symfac)
             push!(cuts, cut)
             push!(components, component)
         end
@@ -153,29 +144,27 @@ function generate_reactionnetwork(strs, assembly_system; maxlevel, aggkernel=not
 
     nonzero_rs = filter(r->ks[r] ≉ 0 || fs[r] ≉ 0, eachindex(reactions))
     reactions = reactions[nonzero_rs]
-    bonds = bonds[nonzero_rs]
-    symmetry_factors = symmetry_factors[nonzero_rs]
     ks = ks[nonzero_rs]
     fs = fs[nonzero_rs]
 
-    return reactions, bonds, symmetry_factors, ks, fs
+    return reactions, ks, fs
 end
 
-function kinetic_network(strs, assembly_system; maxbonds, aggkernel=nothing, brkkernel=nothing, k0=1)
-    reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
+function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=kernel, k0=1)
+    strs = polygen(assembly_system)
+    M = compositions(strs, assembly_system)
+
+    reactions, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
+    ρs = densities(ξ, M, Zs)
 
     function update_step!(du, u, p, t)
-        εs = @view p[2:end]
         du .= 0
 
         for r in eachindex(reactions)
             i, j, k = reactions[r]
-            bs = bonds[r]
-            sym = symfacs[r]
 
             Ka = k0 * ks[r] * u[i] * u[j]
-            # Kb = 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k] / sym
-            Kb = exp(log(k0) + log(8π^2) + sum(-εs[b] for b in bs) + log(fs[r])) * u[k] / sym
+            Kb = k0 * fs[r] * (ρs[i] * ρs[j] / ρs[k]) * u[k]
 
             Rij = Kb - Ka # We don't need a factor of 2 for i == j, because we add it twice in that case!
             Rk = Ka - Kb
@@ -189,58 +178,60 @@ function kinetic_network(strs, assembly_system; maxbonds, aggkernel=nothing, brk
     return update_step!
 end
 
-function stochastic_network(strs, assembly_system; aggkernel=nothing, brkkernel=nothing, maxbonds)
-    reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
+# function stochastic_network(strs, assembly_system; aggkernel=nothing, brkkernel=nothing, maxbonds)
+#     reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
 
-    function reaction_weight(r, dir, u, p)
-        i, j, k = reactions[r]
-        bs = bonds[r]
-        sym = symfacs[r]
-        V, εs = p[1], @view p[2:end]
+#     function reaction_weight(r, dir, u, p)
+#         i, j, k = reactions[r]
+#         bs = bonds[r]
+#         sym = symfacs[r]
+#         V, εs = p[1], @view p[2:end]
 
-        if dir == 1
-            pref = i != j ? 1.0 : (u[i] > 1 ? 1.0 : 0.0)
-            return inv(V) * pref * ks[r] * u[i] * u[j]
-        elseif dir == 2
-            return 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k] / sym
-        end
-        error()
-        return 
-    end
+#         if dir == 1
+#             pref = i != j ? 1.0 : (u[i] > 1 ? 1.0 : 0.0)
+#             return inv(V) * pref * ks[r] * u[i] * u[j]
+#         elseif dir == 2
+#             return 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k] / sym
+#         end
+#         error()
+#         return 
+#     end
 
-    ws = zeros(length(reactions), 2)
+#     ws = zeros(length(reactions), 2)
 
-    function update_step!(rng, u, p, t)    
-        for r in eachindex(reactions), d in (1, 2)
-            ws[r, d] = reaction_weight(r, d, u, p)
-        end
+#     function update_step!(rng, u, p, t)    
+#         for r in eachindex(reactions), d in (1, 2)
+#             ws[r, d] = reaction_weight(r, d, u, p)
+#         end
 
-        wsum = sum(ws)
-        τ = inv(wsum) * log(inv(rand(rng)))
+#         wsum = sum(ws)
+#         τ = inv(wsum) * log(inv(rand(rng)))
 
-        ci = sample(rng, vec(CartesianIndices(ws)), Weights(vec(ws), wsum))
-        r, dir = ci[1], ci[2]
-        i, j, k = reactions[r]
-        if dir == 1 
-            u[i] -= 1
-            u[j] -= 1
-            u[k] += 1
-        elseif dir == 2
-            u[i] += 1
-            u[j] += 1
-            u[k] -= 1
-        else
-            error()
-        end
-        return τ
-    end
-    return update_step!
-end
+#         ci = sample(rng, vec(CartesianIndices(ws)), Weights(vec(ws), wsum))
+#         r, dir = ci[1], ci[2]
+#         i, j, k = reactions[r]
+#         if dir == 1 
+#             u[i] -= 1
+#             u[j] -= 1
+#             u[k] += 1
+#         elseif dir == 2
+#             u[i] += 1
+#             u[j] += 1
+#             u[k] -= 1
+#         else
+#             error()
+#         end
+#         return τ
+#     end
+#     return update_step!
+# end
 
-function kinetic_simulate(strs, sys, u0, Ts, p; aggkernel=nothing, brkkernel=nothing, maxbonds=Inf, k0=1, saveat=[])
-    step = kinetic_network(strs, sys; aggkernel, brkkernel, maxbonds, k0)
+function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, k0=1, saveat=[])
+    step = kinetic_network(sys, ξ, Zs; kernel, brkkernel, maxbonds, k0)
+    M = compositions(polygen(sys), sys)
 
-    prob = ODEProblem(step, u0, Ts ./ k0, p)
+    ϕ0 = monomer_densities(ξ, M, Zs)
+    prob = ODEProblem(step, vcat(ϕ0, zeros(size(M, 1) - length(ϕ0))), Ts ./ k0)
     sol = solve(prob, Rodas5(); saveat=saveat/k0)
 
     ts = sol.t * k0
@@ -248,39 +239,38 @@ function kinetic_simulate(strs, sys, u0, Ts, p; aggkernel=nothing, brkkernel=not
     return us, ts
 end
 
-function stochastic_simulate(strs, assembly_system, u0, Ts, p; aggkernel=nothing, brkkernel=nothing, maxbonds=Inf, rng=Random.default_rng(), nsteps=100_000, cinterval=max(nsteps÷100, 1))
-    step = stochastic_network(strs, assembly_system; aggkernel, brkkernel, maxbonds)
+# function stochastic_simulate(strs, assembly_system, u0, Ts, p; aggkernel=nothing, brkkernel=nothing, maxbonds=Inf, rng=Random.default_rng(), nsteps=100_000, cinterval=max(nsteps÷100, 1))
+#     step = stochastic_network(strs, assembly_system; aggkernel, brkkernel, maxbonds)
 
-    ts = zeros(nsteps ÷ cinterval)
-    us = zeros(Int, length(u0), nsteps ÷ cinterval)
+#     ts = zeros(nsteps ÷ cinterval)
+#     us = zeros(Int, length(u0), nsteps ÷ cinterval)
 
-    u = copy(u0)
-    us[:, 1] .= u
+#     u = copy(u0)
+#     us[:, 1] .= u
 
-    t = ts[1] = Ts[1]
-    for i in 2:nsteps
-        dt = step(rng, u, p, t)
-        t += dt
-        if i % cinterval == 0
-            us[:, i÷cinterval] .= u
-            ts[i÷cinterval] = t
-        end
-        if t >= Ts[2]
-            ts = ts[1:i÷cinterval]
-            us = us[:, 1:i÷cinterval]
-            break
-        end
-    end
-    return us, ts
-end
+#     t = ts[1] = Ts[1]
+#     for i in 2:nsteps
+#         dt = step(rng, u, p, t)
+#         t += dt
+#         if i % cinterval == 0
+#             us[:, i÷cinterval] .= u
+#             ts[i÷cinterval] = t
+#         end
+#         if t >= Ts[2]
+#             ts = ts[1:i÷cinterval]
+#             us = us[:, 1:i÷cinterval]
+#             break
+#         end
+#     end
+#     return us, ts
+# end
 
-function stability_matrix(strs, assembly_system; aggkernel=nothing, brkkernel=nothing, maxbonds)
+function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbonds)
+    strs = polygen(assembly_system)
     ns = length(strs)
-    np, nb = size(assembly_system)
 
-    reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
+    reactions, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
     M = compositions(strs, assembly_system)
-    Zs = 8π^2 ./ [s.σ for s in strs]
 
     function Sfn!(S, ξ)
         S .= 0
@@ -288,11 +278,9 @@ function stability_matrix(strs, assembly_system; aggkernel=nothing, brkkernel=no
 
         for r in eachindex(reactions)
             i, j, k = reactions[r]
-            bs = bonds[r]
-            sym = symfacs[r]
 
             Ka = ks[r]
-            Kb = 8π^2 * exp(sum(-ξ[b+np] for b in bs)) * fs[r] / sym
+            Kb = (ρeq[i] * ρeq[j] / ρeq[k]) * fs[r]
 
             S[i, i] += -Ka * ρeq[j] 
             S[i, j] += -Ka * ρeq[i] 
@@ -313,21 +301,14 @@ function stability_matrix(strs, assembly_system; aggkernel=nothing, brkkernel=no
 
     function ∂S∂μfn!(S, ξ)
         S .= 0
+        ρeq = densities(ξ, M, Zs)
         ∂ρeq = ∂ρ∂μ(ξ, M, Zs)
 
         for r in eachindex(reactions)
             i, j, k = reactions[r]
-            bs = bonds[r]
-            sym = symfacs[r]
-
-            #TODO fix this hack
-            B = zeros(eltype(ξ), np + nb)
-            for b in bs 
-                B[np+b] += 1
-            end
 
             Ka = ks[r]
-            Kb = -8π^2 * B * exp(sum(-ξ[b+np] for b in bs)) * fs[r] / sym
+            Kb = (-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[k, :] + ∂ρeq[i, :] * ρeq[j] / ρeq[k] + ∂ρeq[j, :] * ρeq[i] / ρeq[k]) * fs[r] 
 
             S[i, i, :] += -Ka * ∂ρeq[j, :] 
             S[i, j, :] += -Ka * ∂ρeq[i, :] 
