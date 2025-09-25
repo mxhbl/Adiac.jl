@@ -173,9 +173,9 @@ function kinetic_network(strs, assembly_system; maxbonds, aggkernel=nothing, brk
             bs = bonds[r]
             sym = symfacs[r]
 
-            Ka = k0 * ks[r] * u[i] * u[j] * sym
-            # Kb = 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k]
-            Kb = exp(log(k0) + log(8π^2) + sum(-εs[b] for b in bs) + log(fs[r])) * u[k]
+            Ka = k0 * ks[r] * u[i] * u[j]
+            # Kb = 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k] / sym
+            Kb = exp(log(k0) + log(8π^2) + sum(-εs[b] for b in bs) + log(fs[r])) * u[k] / sym
 
             Rij = Kb - Ka # We don't need a factor of 2 for i == j, because we add it twice in that case!
             Rk = Ka - Kb
@@ -200,9 +200,9 @@ function stochastic_network(strs, assembly_system; aggkernel=nothing, brkkernel=
 
         if dir == 1
             pref = i != j ? 1.0 : (u[i] > 1 ? 1.0 : 0.0)
-            return inv(V) * pref * ks[r] * u[i] * u[j] * sym
+            return inv(V) * pref * ks[r] * u[i] * u[j]
         elseif dir == 2
-            return 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k]
+            return 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k] / sym
         end
         error()
         return 
@@ -280,7 +280,7 @@ function stability_matrix(strs, assembly_system; aggkernel=nothing, brkkernel=no
 
     reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
     M = compositions(strs, assembly_system)
-    Zs = 8π^2 * inv.(s.σ for s in strs)
+    Zs = 8π^2 ./ [s.σ for s in strs]
 
     function Sfn!(S, ξ)
         S .= 0
@@ -291,8 +291,8 @@ function stability_matrix(strs, assembly_system; aggkernel=nothing, brkkernel=no
             bs = bonds[r]
             sym = symfacs[r]
 
-            Ka = ks[r] * sym
-            Kb = 8π^2 * exp(sum(-ξ[b+np] for b in bs)) * fs[r]
+            Ka = ks[r]
+            Kb = 8π^2 * exp(sum(-ξ[b+np] for b in bs)) * fs[r] / sym
 
             S[i, i] += -Ka * ρeq[j] 
             S[i, j] += -Ka * ρeq[i] 
@@ -326,8 +326,8 @@ function stability_matrix(strs, assembly_system; aggkernel=nothing, brkkernel=no
                 B[np+b] += 1
             end
 
-            Ka = ks[r] * sym
-            Kb = -8π^2 * B * exp(sum(-ξ[b+np] for b in bs)) * fs[r]
+            Ka = ks[r]
+            Kb = -8π^2 * B * exp(sum(-ξ[b+np] for b in bs)) * fs[r] / sym
 
             S[i, i, :] += -Ka * ∂ρeq[j, :] 
             S[i, j, :] += -Ka * ∂ρeq[i, :] 
@@ -424,34 +424,34 @@ function ∂τc(S, ∂S; np, thresh=1e-12)
 end
 
 
-function reactionweights(ξ, strs, sys; ρs=nothing, aggkernel=nothing, brkkernel=nothing, maxbonds=Inf)
-    np, nb = size(sys)
+# function reactionweights(ξ, strs, sys; ρs=nothing, aggkernel=nothing, brkkernel=nothing, maxbonds=Inf)
+#     np, nb = size(sys)
 
-    reactions, bonds, symmetry_factors, ks, fs = generate_reactionnetwork(strs, sys; maxlevel=maxbonds, aggkernel, brkkernel)
-    M = compositions(strs, sys)
-    Zs = 8π^2 * inv.(s.σ for s in strs)
+#     reactions, bonds, symmetry_factors, ks, fs = generate_reactionnetwork(strs, sys; maxlevel=maxbonds, aggkernel, brkkernel)
+#     M = compositions(strs, sys)
+#     Zs = 8π^2 * inv.(s.σ for s in strs)
 
-    if isnothing(ρs)
-        ρs = densities(ξ, M, Zs)
-    end
+#     if isnothing(ρs)
+#         ρs = densities(ξ, M, Zs)
+#     end
     
-    function reaction_weight(r)
-        i, j, k = reactions[r]
-        bs = bonds[r]
-        sym = symmetry_factors[r]
+#     function reaction_weight(r)
+#         i, j, k = reactions[r]
+#         bs = bonds[r]
+#         sym = symmetry_factors[r]
 
-        δ = exp(sum(-ξ[b + np] for b in bs))
+#         δ = exp(sum(-ξ[b + np] for b in bs))
 
-        fwd_rate = ks[r] * ρs[i] * ρs[j] * sym
-        bwd_rate = δ * fs[r] * ρs[k]
-        return (fwd_rate, bwd_rate)
-    end
+#         fwd_rate = ks[r] * ρs[i] * ρs[j] 
+#         bwd_rate = δ * fs[r] * ρs[k] / sym
+#         return (fwd_rate, bwd_rate)
+#     end
 
-    ws = zeros(length(reactions), 2)
+#     ws = zeros(length(reactions), 2)
 
-    for r in eachindex(reactions)
-        ws[r, :] .= reaction_weight(r)
-    end
+#     for r in eachindex(reactions)
+#         ws[r, :] .= reaction_weight(r)
+#     end
 
-    return reactions, ws
-end
+#     return reactions, ws
+# end
