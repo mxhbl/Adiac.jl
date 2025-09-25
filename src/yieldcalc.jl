@@ -11,17 +11,47 @@ end
 monomer_densities(ξ, M, Zs) = _monomer_densities(ξ, M, view(M, :, 1:n_species(M)), Zs)
 monomer_densities(ϕs, εs, M, Zs; solve_kwargs...) = monomer_densities([μs_of_ϕs(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
 
-function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=100_000)
+# function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=100_000)
+#     nμ = length(ϕs)
+#     N = M[:, 1:nμ]
+#     B = M[:, nμ+1:end]
+
+#     f!, jac!, jvp!, vjp! = _setup_conversion(ϕs, N, B, Zs)
+#     f = NonlinearFunction(f!, jac=jac!, jvp=jvp!, vjp=vjp!)
+    
+#     init_μs = -1.5 * mean(εs) * ones(nμ)
+#     prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
+#     solution = solve(prob; maxiters)
+
+#     if solution.retcode == ReturnCode.Success
+#         return Vector(solution.u)
+#     elseif solution.retcode == ReturnCode.Stalled
+#         @warn "solution status stalled, proceed with care"
+#         return Vector(solution.u)
+#     else
+#         return fill(Missing, nμ)
+#     end
+# end
+
+function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=1_000_000)
+    if any(<(-atol), ϕs)
+        throw(ArgumentError("Particle concentrations cannot be negative."))
+    end
     nμ = length(ϕs)
     N = M[:, 1:nμ]
     B = M[:, nμ+1:end]
 
-    f!, jac!, jvp!, vjp! = _setup_conversion(ϕs, N, B, Zs)
-    f = NonlinearFunction(f!, jac=jac!, jvp=jvp!, vjp=vjp!)
+    logNs = [log.(N[N[:, i] .> 0, i]) for i in 1:nμ]
+    Ns = [N[N[:, i] .> 0, :] for i in 1:nμ]
+    Bs = [B[N[:, i] .> 0, :] for i in 1:nμ]
+    logZs = [log.(Zs[N[:, i] .> 0]) for i in 1:nμ]
+
+    logϕplus1(μs, εs, i) = LogExpFunctions.logsumexp([0; logNs[i] .+ logZs[i] .+ Ns[i]*μs .+ Bs[i]*εs])
+    f(μs, εs) = [logϕplus1(μs, εs, i) - log(ϕs[i] + 1) for i in 1:nμ] 
     
-    init_μs = -1.5 * mean(εs) * ones(nμ)
+    init_μs = -1.1 * mean(εs) * ones(nμ)
     prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
-    solution = solve(prob; maxiters)
+    solution = solve(prob, TrustRegion(); maxiters)
 
     if solution.retcode == ReturnCode.Success
         return Vector(solution.u)
@@ -29,6 +59,7 @@ function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=100_000)
         @warn "solution status stalled, proceed with care"
         return Vector(solution.u)
     else
+        @error "solution status $(solution.retcode)"
         return fill(Missing, nμ)
     end
 end

@@ -280,7 +280,7 @@ function stability_matrix(strs, assembly_system; aggkernel=nothing, brkkernel=no
 
     reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
     M = compositions(strs, assembly_system)
-    Zs = 8π^2 ./ [s.σ for s in strs]
+    Zs = 8π^2 * inv.(s.σ for s in strs)
 
     function Sfn!(S, ξ)
         S .= 0
@@ -429,7 +429,7 @@ function reactionweights(ξ, strs, sys; ρs=nothing, aggkernel=nothing, brkkerne
 
     reactions, bonds, symmetry_factors, ks, fs = generate_reactionnetwork(strs, sys; maxlevel=maxbonds, aggkernel, brkkernel)
     M = compositions(strs, sys)
-    Zs = 8π^2 * inv.([s.σ for s in strs])
+    Zs = 8π^2 * inv.(s.σ for s in strs)
 
     if isnothing(ρs)
         ρs = densities(ξ, M, Zs)
