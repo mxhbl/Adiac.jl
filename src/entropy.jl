@@ -1,5 +1,6 @@
 
 function map_potentials(bond_potential::Function, p::Polyform, sys::AssemblySystem; energy_kwargs...)
+    n = size(p)
     es = exterior_edges(p.anatomy)
     bonds = ((Roly.vertex2particle(p, sys, e.src), Roly.vertex2particle(p, sys, e.dst)) for e in es)
     geoms = sys.geometries
@@ -7,10 +8,11 @@ function map_potentials(bond_potential::Function, p::Polyform, sys::AssemblySyst
 
     d = Roly.dimension(p)
     function energy_fn(ξs::AbstractMatrix{<:Real})
+        size(ξs) == (3, n) || throw(ArgumentError("Invalid coordinates"))
         E = 0
         for ((i, si), (j, sj)) in bonds
             xi, ψi = @views ξs[1:d, i], ξs[d+1:end, i]
-            xj, ψj  = @views ξs[1:d, j], ξs[d+1:end, j]
+            xj, ψj = @views ξs[1:d, j], ξs[d+1:end, j]
 
             E += bond_potential(xi, xj, ψi, ψj, geoms[spcs[i]], geoms[spcs[j]], si, sj; energy_kwargs...)
         end
@@ -51,11 +53,13 @@ function comcoords2abscoords(V, ξcom, ξ0)
 end
 
 function entropy(p::Polyform{D}, sys::AssemblySystem; potential=twospring_bond, atol=1e-6, potential_kwargs...) where {D}
+    n = size(p)
     dr = D == 2 ? 1 : 4
     H = polyform_hessian(potential, p, sys; potential_kwargs...)
     ξ0 = combinecoords(p.xs, p.ψs)
 
     λs, vs = eigen(H)
+    # @show λs
     @assert all(abs.(λs[1:D+dr]) .< atol)
 
     S_vib = -0.5 * sum(log, λs[D+dr+1:end] / (2π); init=0)
@@ -64,6 +68,7 @@ function entropy(p::Polyform{D}, sys::AssemblySystem; potential=twospring_bond, 
     Ovib = zeros(length(λs) - (D+dr))
     ctransform(ξs) = comcoords2abscoords(vs, ξs, ξ0)
     jac2d(ψ, p) = abs(det(ForwardDiff.jacobian(ctransform, [Otrans; ψ; Ovib])))
+
     function jac3d(θ, p)
         α, β, γ = θ
         sa, ca = sincos(α)
@@ -78,7 +83,7 @@ function entropy(p::Polyform{D}, sys::AssemblySystem; potential=twospring_bond, 
     if D == 2
         bounds = (0, 2)
         prob = IntegralProblem(jac2d, bounds)
-        Z_rot = solve(prob, QuadGKJL(); abstol=atol).u
+        Z_rot = π^n * solve(prob, QuadGKJL(); abstol=atol).u
     else
         bounds = (zeros(3), [π/2, π, 2π])
         prob = IntegralProblem(θ->jac3d, bounds)
@@ -88,7 +93,7 @@ function entropy(p::Polyform{D}, sys::AssemblySystem; potential=twospring_bond, 
     # # CAREFUL ABOUT DISTINGUISHING SYMMETRY NUMBER 
     # σ = size(p) > 1 ? p.σ : 1
     σ = p.σ
-    S_rot = log(π * Z_rot / σ)
+    S_rot = log(Z_rot / σ)
     
     return S_vib, S_rot
 end

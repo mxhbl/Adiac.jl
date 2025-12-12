@@ -73,7 +73,7 @@ function linear_design(M, idxs; preprocess=true, refine_undesignable=true, atol=
     return infapprox(xi_hat, infval), residual
 end
 
-function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, maxmode=:mean, infval=100)
     nμ = n_species(M)
 
     if preprocess
@@ -109,8 +109,7 @@ function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, m
         phi = Convex.logsumexp(M * x - log.(σs) + log.(ns))
         problem = minimize(c,
                            phi <= log(max_ϕ),
-                        #    maximum(x[nμ+1:end]) <= max_ε)
-                           sum(x[(nμ + 1):end]) == max_ε * (npars - nμ))
+                           maxmode == :max ? maximum(x[nμ+1:end]) <= max_ε : sum(x[(nμ + 1):end]) == max_ε * (npars - nμ))
         # NORM CONSTRAINT + NEGATIVE MUS
         # problem = minimize(c,
         #                    norm(x) <= max_ε,
