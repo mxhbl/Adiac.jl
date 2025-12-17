@@ -105,7 +105,12 @@ function Uintegral_test(A; kwargs...)
     res = solve(prob, HCubatureJL(); kwargs...)
     return res.u
 end
-
+function Uintegral_exact_wrong(σs; kwargs...)
+    α, β, γ = σs
+    F32 = sinh(α) * sinh(β) * sinh(γ) / (α * β * γ)
+    # F52 = 3 / (α * β * γ) * sum(e1*e2*e3 * sinh(e1*α + e2*β + e3*γ) / (e1*α + e2*β + e3*γ)^2 for e1 in [-1, 1], e2 in [-1, 1], e3 in [-1, 1])
+    return 8π^2 * F32
+end
 
 function entropy3d(A, k)
     n = size(A, 2)
@@ -163,7 +168,7 @@ begin
     r = 1
     A = [d d;
         -r/2 r/2]
-    k = 10
+    k = 1
 
     energy_fn, resh = make_dimerenergy(A; k)
     eflat = x->energy_fn(resh(x)...)
@@ -211,7 +216,7 @@ begin
     sys = AssemblySystem(rules, UnitSquareGeometry)
 
     strs = polygen(sys)
-    s = strs[3]
+    s = strs[end]
 end
 begin
     e_old = Adiac.map_potentials(Adiac.twospring_bond, s, sys; ω=sqrt(k), r=r, ε=0)
