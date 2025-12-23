@@ -265,9 +265,8 @@ end
 #     return us, ts
 # end
 
-function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbonds)
+function stability_matrix(assembly_system; symmetrize=false, kernel, brkkernel=kernel, Zs, maxbonds)
     strs = polygen(assembly_system)
-    ns = length(strs)
 
     reactions, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
     M = compositions(strs, assembly_system)
@@ -294,74 +293,123 @@ function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbond
             S[k, j] += Ka * ρeq[i] 
             S[k, k] += -Kb
         end
-        return S # TODO: remove this once other functions are fixed
+        return S 
     end
-
-    Sfn(ξ) = Sfn!(zeros(eltype(ξ), ns, ns), ξ)
 
     function ∂S∂μfn!(S, ξ)
         S .= 0
         ρeq = densities(ξ, M, Zs)
-        ∂ρeq = ∂ρ∂μ(ξ, M, Zs)
+        ∂ρeq = permutedims(∂ρ∂μ(ξ, M, Zs))
+
+        scratch = zero(ξ)
 
         for r in eachindex(reactions)
             i, j, k = reactions[r]
 
             Ka = ks[r]
-            Kb = (-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[k, :] + ∂ρeq[i, :] * ρeq[j] / ρeq[k] + ∂ρeq[j, :] * ρeq[i] / ρeq[k]) * fs[r] 
+            Kb = fs[r] 
 
-            S[i, i, :] += -Ka * ∂ρeq[j, :] 
-            S[i, j, :] += -Ka * ∂ρeq[i, :] 
-            S[i, k, :] += Kb
+            @views @. begin 
+                scratch = -Ka * ∂ρeq[:, j] 
+                S[i, i, :] += scratch
+                S[j, i, :] += scratch
+                S[k, i, :] -= scratch
 
-            S[j, i, :] += -Ka * ∂ρeq[j, :] 
-            S[j, j, :] += -Ka * ∂ρeq[i, :] 
-            S[j, k, :] += Kb
 
-            S[k, i, :] += Ka * ∂ρeq[j, :] 
-            S[k, j, :] += Ka * ∂ρeq[i, :] 
-            S[k, k, :] += -Kb
+                scratch = -Ka * ∂ρeq[:, i] 
+                S[i, j, :] += scratch
+                S[j, j, :] += scratch
+                S[k, j, :] -= scratch
+
+                scratch = Kb *(-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[:, k] + 
+                            ∂ρeq[:, i] * ρeq[j] / ρeq[k] 
+                            + ∂ρeq[:, j] * ρeq[i] / ρeq[k])
+                S[i, k, :] += scratch
+                S[j, k, :] += scratch
+                S[k, k, :] -= scratch
+            end
         end
         return S
     end
 
-    ∂S∂μfn(ξ) = ∂S∂μfn!(zeros(eltype(ξ), ns, ns, length(ξ)), ξ)
+    #####################
+    #### Return inv(D) S D, where D = sqrt(ρᵢ)
+    function Ssym_fn!(S, ξ; scale=1)
+        ρeq = densities(ξ, M, Zs)
+        ρeq_sqrt = sqrt.(ρeq)
 
+        S .= 0
+        for r in eachindex(reactions)
+            i, j, k = reactions[r]
 
-    # function ∂S∂ϕfn(ϕs, εs)
-    #     S = zeros(eltype(ϕs), ns, ns, np + nb)
-    #     ∂ρeq = ∂ρ∂ϕ(ϕs, εs, M, Zs)
+            Ka = ks[r] * scale
+            Kb = fs[r] * scale
 
-    #     for r in eachindex(reactions)
-    #         i, j, k = reactions[r]
-    #         bs = bonds[r]
-    #         sym = symfacs[r]
+            ij = ρeq_sqrt[i] * ρeq_sqrt[j] 
+            ik = ρeq_sqrt[i] / ρeq_sqrt[k] * ρeq[j]
+            jk = ρeq_sqrt[j] / ρeq_sqrt[k] * ρeq[i]
 
-    #         #TODO fix this hack
-    #         B = zeros(eltype(ϕs), np + nb)
-    #         for b in bs 
-    #             B[np+b] += 1
-    #         end
+            S[i, i] += -Ka * ρeq[j]
+            S[i, j] += -Ka * ij
+            S[i, k] += Kb * ik
 
-    #         Ka = α * ks[r] * sym
-    #         Kb = α * -rotation_factor * B * exp(sum(-εs[b] for b in bs)) * fs[r]
+            S[j, i] += -Ka * ij
+            S[j, j] += -Ka * ρeq[i]
+            S[j, k] += Kb * jk
 
-    #         S[i, i, :] += -Ka * ∂ρeq[j, :] 
-    #         S[i, j, :] += -Ka * ∂ρeq[i, :] 
-    #         S[i, k, :] += Kb
+            S[k, i] += Ka * ik
+            S[k, j] += Ka * jk
+            S[k, k] += -Kb * (ρeq[i] * ρeq[j] / ρeq[k])
+        end
+        return S
+    end
 
-    #         S[j, i, :] += -Ka * ∂ρeq[j, :] 
-    #         S[j, j, :] += -Ka * ∂ρeq[i, :] 
-    #         S[j, k, :] += Kb
+    function ∂Ssym∂μ_fn!(S, ξ; scale=1)
+        ρeq = densities(ξ, M, Zs)
+        ρeq_sqrt = sqrt.(ρeq)
+        ∂ρeq = permutedims(∂ρ∂μ(ξ, M, Zs))
 
-    #         S[k, i, :] += Ka * ∂ρeq[j, :] 
-    #         S[k, j, :] += Ka * ∂ρeq[i, :] 
-    #         S[k, k, :] += -Kb
-    #     end
-    #     return S
-    # end
+        S .= 0
 
-    return Sfn, ∂S∂μfn, Sfn!, ∂S∂μfn!
+        scratch = zero(ξ)
+
+        for r in eachindex(reactions)
+            i, j, k = reactions[r]
+
+            Ka = ks[r] * scale
+            Kb = fs[r] * scale
+
+            @views @. begin
+                scratch = -Ka * ((ρeq_sqrt[j] / ρeq_sqrt[i]) * ∂ρeq[:, i] + (ρeq_sqrt[i] / ρeq_sqrt[j]) * ∂ρeq[:, j]) / 2
+                S[i, j, :] += scratch
+                S[j, i, :] += scratch
+
+                # ik
+                scratch = (ρeq_sqrt[i] / ρeq_sqrt[k] * ∂ρeq[:, j] + ρeq[j] / (2ρeq_sqrt[i] * ρeq_sqrt[k]) * ∂ρeq[:, i] -
+                    ρeq_sqrt[i] * ρeq[j] / (2ρeq_sqrt[k]^3) * ∂ρeq[:, k])
+                S[i, k, :] += Kb * scratch
+                S[k, i, :] += Ka * scratch
+
+                # jk
+                scratch = (ρeq_sqrt[j] / ρeq_sqrt[k] * ∂ρeq[:, i] + ρeq[i] / (2ρeq_sqrt[j] * ρeq_sqrt[k]) * ∂ρeq[:, j] -
+                ρeq_sqrt[j] * ρeq[i] / (2ρeq_sqrt[k]^3) * ∂ρeq[:, k])
+
+                S[j, k, :] += Kb * scratch
+                S[k, j, :] += Ka * scratch
+
+                S[i, i, :] += -Ka * ∂ρeq[:, j] 
+                S[j, j, :] += -Ka * ∂ρeq[:, i] 
+                S[k, k, :] += -Kb * (-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[:, k] + ∂ρeq[:, i] * ρeq[j] / ρeq[k] + ∂ρeq[:, j] * ρeq[i] / ρeq[k])
+            end
+        end
+        return S
+    end
+
+    if symmetrize
+        return Ssym_fn!, ∂Ssym∂μ_fn!
+    else
+        return Sfn!, ∂S∂μfn!
+    end
 end
 
 function τc(S; np, thresh=1e-12)
