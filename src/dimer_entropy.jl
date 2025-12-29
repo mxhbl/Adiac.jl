@@ -90,6 +90,26 @@ function entropy2d_expand(A, k)
     return (2π)^2/K * sqrt(2π/t)
 end
 
+function Fintegral(σs; kwargs...)
+    a = (σs[1] + σs[2]) / 2
+    b = (σs[1] - σs[2]) / 2
+    c = σs[3]
+    f(x, p) = exp(c * x) * besseli(0, a*x) * besseli(0, b*(1-x))
+    prob = IntegralProblem(f, (0, 1))
+    res = solve(prob, QuadGKJL(); kwargs...)
+    return res.u
+end
+
+function Fintegral_exact(σs; kwargs...)
+    a = (σs[1] + σs[2]) / 2
+    b = (σs[1] - σs[2]) / 2
+    c = σs[3]
+    Δ = sqrt(complex((c^2 - (a^2 + b^2)) * (c^2 - (a^2 - b^2))))
+    return exp(c/2) / Δ * sinh(Δ/2)
+end
+
+
+
 function Uintegral(σs; kwargs...)
     a = (σs[1] + σs[2]) / 2
     b = (σs[1] - σs[2]) / 2
