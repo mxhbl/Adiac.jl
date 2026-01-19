@@ -47,14 +47,42 @@ function R(ψ::Euler)
 end
 
 R(x::AbstractArray) = R(Euler(x))
+R(x::Number) = R(Angle(x))
 
+function Euler(R::AbstractMatrix)
+    size(R) == (3, 3) && (R' * R ≈ I) || throw(ArgumentError("R must be an orthogonal 3x3 matrix"))
+    β = acos(R[3, 3])
+    sb = sin(β)
 
-function make_dimerenergy(As, Bs=As.-sum(As, dims=2)/size(As, 2); k)
+    γ = atan(R[3, 2] / sb, -R[3, 1] / sb)
+    α = atan(R[2, 3] / sb, R[1, 3] / sb)
+    return Euler(α, β, γ)
+end
+
+function Base.inv(ψ::Euler)
+    # Equivalent to Euler(R(ψ)')
+    α, β, γ = ψ
+    return Euler(-γ, -β, -α)
+end
+
+function Base.:(*)(ψ1::Euler, ψ2::Euler)
+    return Euler(R(ψ1) * R(ψ2))
+end
+
+function Base.:(*)(ψ1::Angle, ψ2::Angle)
+    return Angle((ψ1[] + ψ2[]) % 2π)
+end
+function Base.inv(ψ::Angle)
+    return Angle(2π - ψ[])
+end
+
+function make_dimerenergy(As, Bs; k)#, offset=true)
     # the offset is needed for euler angles to avoid having equilibrium at gimbal lock
     # right now, this breaks 2d
     D = size(As, 1)
 
-    R_offset = D == 2 ? I : R([0, π/2, 0])
+    # R_offset = !offset || D == 2 ? I : R([0, π/2, 0])
+    R_offset = I
 
     reshape2d(x; dropfirst=false) = !dropfirst ? (x[1:2], Angle(x[3]), x[4:5], Angle(x[6])) : (zeros(2), Angle(x[1]), x[2:3], Angle(x[4]))
     reshape3d(x; dropfirst=false) = !dropfirst ? (x[1:3], Euler(x[4:6]), x[7:9], Euler(x[10:12])) : (zeros(3), Euler(x[1:3]), x[4:6], Euler(x[7:9]))
@@ -90,30 +118,46 @@ function entropy2d_expand(A, k)
     return (2π)^2/K * sqrt(2π/t)
 end
 
-function Fintegral(σs; kwargs...)
-    a = (σs[1] + σs[2]) / 2
-    b = (σs[1] - σs[2]) / 2
-    c = σs[3]
-    f(x, p) = exp(c * x) * besseli(0, a*x) * besseli(0, b*(1-x))
-    prob = IntegralProblem(f, (0, 1))
-    res = solve(prob, QuadGKJL(); kwargs...)
-    return res.u
+begin
+    ls = 0:0.1:5
+    A = randn(3, 3)
+    # A = A * sign(det(A))
+
+    exacts = [Uintegral(l * A) for l in ls]
+    expands = [Uintegral_expand(l * A) for l in ls]
+
+    lines(ls, exacts ./ expands)
+    ylims!(0, 2)
+    current_figure()
 end
 
-function Fintegral_exact(σs; kwargs...)
-    a = (σs[1] + σs[2]) / 2
-    b = (σs[1] - σs[2]) / 2
-    c = σs[3]
-    Δ = sqrt(complex((c^2 - (a^2 + b^2)) * (c^2 - (a^2 - b^2))))
-    return exp(c/2) / Δ * sinh(Δ/2)
+function Uintegral_expand(A::AbstractMatrix)
+    x, y, z = svdvals(A)
+    z *= sign(det(A))
+
+    # a = (σs[1] + σs[2]) / 2
+    # b = (σs[1] - σs[2]) / 2
+    # c = σs[3] * sdet
+
+    return (2π)^(3/2) * exp((x + y + z)) / sqrt((x+y)*(y+z)*(x+z))
+    # sdet = sign(det(A))
+    # top = exp(a + b + c)
+
+    # bot1 = ((a + b) * (a + c) * (b + c))^(1/3)
+    # bot2 = (abs(a - b) * abs(a - c) * abs(b - c))^(1/6)
+    # # bot = sqrt((a+b) * abs(a - b) * (a+c))
+
+    # return sqrt(2π)^3 * top / (bot1 * bot2)
+
 end
 
+function Uintegral(A::AbstractMatrix; kwargs...)
+    σs = svdvals(A)
+    sdet = sign(det(A))
 
-
-function Uintegral(σs; kwargs...)
     a = (σs[1] + σs[2]) / 2
     b = (σs[1] - σs[2]) / 2
-    c = σs[3]
+    c = σs[3] * sdet
     f(x, p) = exp(c * x) * besseli(0, a*(x+1)) * besseli(0, b*(x-1))
     prob = IntegralProblem(f, (-1, 1))
     res = solve(prob, QuadGKJL(); kwargs...)
@@ -121,6 +165,12 @@ function Uintegral(σs; kwargs...)
 end
 function Uintegral_test(A; kwargs...)
     f(x, p) = exp(tr(A * R(x))) * sin(x[2])
+    prob = IntegralProblem(f, zeros(3), [2π, π, 2π])
+    res = solve(prob, HCubatureJL(); kwargs...)
+    return res.u
+end
+function Rintegral_test(A; kwargs...)
+    f(x, p) = R(x) * exp(tr(A * R(x))) * sin(x[2])
     prob = IntegralProblem(f, zeros(3), [2π, π, 2π])
     res = solve(prob, HCubatureJL(); kwargs...)
     return res.u
@@ -182,9 +232,23 @@ function entropy_direct(A, k; V)
 end
 
 
-
 begin
     d = 0.5
+    r = 1
+    A = [d d;
+        -r/2 r/2]
+    k = 1
+    r0 = vec(sum(A, dims=2)/size(A, 2))
+end
+begin
+    energy_fn, reshape_fn = make_dimerenergy(A, A[:, [2, 1]]; k=5, offset=false)
+    E(x) = energy_fn(reshape_fn(x)...)
+    E([zeros(2); 0; 2r0; π])
+    h = ForwardDiff.gradient(x->E(x), [zeros(2); 0; 2r0; π+0.1])
+end
+
+begin
+    d = 0.5 
     r = 1
     A = [d d;
         -r/2 r/2]
@@ -222,7 +286,13 @@ end
 
 
 
+begin
+    Jx = [0 0 0; 0 0 -1; 0 1 0]
+    Jy = -[0 0 -1; 0 0 0; 1 0 0]
+    Jz = [0 -1 0; 1 0 0; 0 0 0]
 
+    Rexp(ψ::Euler) = exp(ψ[1] * Jz) * exp(ψ[2] * Jy) * exp(ψ[3] * Jz)
+end
 
 
 
@@ -286,4 +356,134 @@ begin
     Ω_expand = entropy2d_expand(A, k)
 
     Ω_approx, Ω_approx_fix, Ω_expand, Ω_exact
+end
+
+
+amean(A) = sum(A, dims=2) / size(A, 2)
+
+function acov(A)
+    abar = amean(A)
+    C = (A .- abar) * (A .- abar)'
+    return C
+end
+
+begin
+    A = stack([x, 1] for x in -1:0.001:1)
+end
+
+
+function map_potential(bond_potential::Function, p::Polyform, sys::AssemblySystem)
+    n = size(p)
+    es = exterior_edges(p.anatomy)
+    bonds = ((Roly.vertex2particle(p, sys, e.src), Roly.vertex2particle(p, sys, e.dst)) for e in es)
+    geoms = sys.geometries
+    spcs = Roly.species(p)
+
+    d = Roly.dimension(p)
+    d == 2 || throw(ArgumentError("Can only handle 2d polyforms"))
+
+    function energy_fn(ξs::AbstractMatrix{<:Real})
+        size(ξs) == (3, n) || throw(ArgumentError("Invalid coordinates"))
+        E = 0
+        for ((i, si), (j, sj)) in bonds
+            xi0, ψi0 = p.xs[i], p.ψs[i].θ
+            xj0, ψj0 = p.xs[j], p.ψs[j].θ
+
+            Δϕ = atan((xj0 - xi0)[2], (xj0 - xi0)[1])
+
+            Ri = R(ψi0)
+            Rj = R(ψj0)
+
+            xi, ψi = @views ξs[1:d, i], ξs[d+1:end, i]
+            xj, ψj = @views ξs[1:d, j], ξs[d+1:end, j]
+
+            E += bond_potential(xi, inv(Angle(ψi0)) * Angle(ψi), xi + R(Δϕ)' * (xj - xi), inv(Angle(ψj0)) * Angle(ψj))
+        end
+        return E
+    end
+
+    return energy_fn
+end
+
+function combinecoords(xs::AbstractVector{<:AbstractVector{F}}, ψs) where {F}
+    n = length(xs)
+    d = length(first(xs))
+    dr = first(ψs) isa Roly.Angle ? 1 : 4
+
+    ξs = zeros(F, d + dr, n)
+    for i in axes(ξs, 2)
+        ξs[1:d, i] .= xs[i]
+        ξs[d+1:end, i] .= Roly.value(ψs[i])
+    end
+    return ξs
+end
+
+function entropy_laplace(energy_fn, ξ0; tether=1e-12)
+    d, n = size(ξ0)
+    d == 3 || throw(ArgumentError("Only works in 2d"))
+    n > 1 || return 2π
+
+    H = ForwardDiff.hessian(energy_fn, ξ0 .+ tether)[4:end, 4:end]
+    λs = eigvals(H)
+    S_vib = -0.5 * sum(log, λs / (2π); init=0)
+    return 2π * exp(S_vib)
+end
+
+function entropy_dimer(A, k)
+    n = size(A, 2)
+    K = k*n
+
+    abar = k * sum(A, dims=2) / K
+    C = k * (A .- abar) * (A .- abar)'
+
+    t = tr(C)
+    return (2π)^3/K * exp(-t) * besseli(0, t)
+end
+
+function entropy_dimer_taylor(A, k)
+    n = size(A, 2)
+    K = k*n
+
+    abar = k * sum(A, dims=2) / K
+    C = k * (A .- abar) * (A .- abar)'
+
+    t = tr(C)
+    return (2π)^2/K * sqrt(2π/t)
+end
+
+function entropy_meanfield_meanz(np, nb; K, σ)
+    d = nb / np
+    return 2π * (320 * π^5 / (K^3 * σ^2 * (8d - 3)))^((np - 1) / 2) * exp(-2nb*(1-1/np))
+end
+
+function entropy_meanfield(np, nb; K, σ)
+    d = nb / np
+    return 2π * (320 * π^5 / (K^3 * σ^2 * (8d - 3)))^((np - 1) / 2) * exp(-2nb*(1-1/np))
+end
+
+begin
+    rules = [1 1 1 3; 1 2 1 4]
+    sys = AssemblySystem(rules, UnitSquareGeometry)
+
+    strs = polygen(sys; maxsize=10)
+    s = strs[findmax(s->length(exterior_edges(s.anatomy)), strs)[2]]
+
+    np = size(s)
+    nb = length(exterior_edges(s.anatomy))
+end
+
+begin
+    n = 100
+    σ = 1
+    A = stack([σ/2, y] for y in range(-σ/2, σ/2; length=n))
+    B = A .- [1, 0]
+    k = 40 / n
+    K = k * n
+    energy_fn, reshape_fn = make_dimerenergy(A, B; k)
+
+    en_s = map_potential(energy_fn, s, sys)
+    ξ = combinecoords(s.xs, s.ψs)
+
+    2π * (entropy_dimer(A, k)/(2π))^(np-1), 2π * (entropy_dimer_taylor(A, k)/(2π))^(np-1)
+    entropy_laplace(en_s, ξ), entropy_meanfield(np, np; K, σ)
 end

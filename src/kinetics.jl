@@ -16,11 +16,6 @@ function cleave(anatomy::AbstractGraph, es::Vector{<:AbstractEdge})
 end
 cleave(anatomy::AbstractGraph, edge::AbstractEdge) = cleave(anatomy, [edge])
 
-
-function exterior_edges(anatomy)
-    return filter!(e->(e.src >= e.dst) && reverse(e)∈edges(anatomy), collect(edges(anatomy)))
-end
-
 function listbonds(bondcounts)
     # Convert bond counts, i.e. [0, 1, 0, 0, 2]
     # into a list of bonds (with repeats), i.e. [2, 5, 5]

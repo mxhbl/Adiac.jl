@@ -7,6 +7,10 @@ function n_species(M::AbstractMatrix)
     return nμ
 end
 
+function exterior_edges(anatomy)
+    return filter!(e->(e.src >= e.dst) && reverse(e)∈edges(anatomy), collect(edges(anatomy)))
+end
+
 normal_vec(x::SVector{2,F}) where F = SVector{2,F}(-x[2], x[1])
 
 function rotate(x, ϕ)
