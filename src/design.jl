@@ -135,8 +135,14 @@ function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, m
     return infapprox(xi, infval), residual
 end
 
-function minenergy_design(M, i; yield, max_ϕ, Zs, preprocess=true, max_steps=100_000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
-    nμ = n_species(M)
+function minenergy_design(M, i; yield, max_ϕ, Zs, equal_energies=false, preprocess=true, max_steps=100_000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+    np = n_species(M)
+    nb = size(M, 2) - np
+    nμ = np
+
+    if equal_energies
+        M = hcat(M[:, 1:nμ], sum(M[:, nμ+1:end]; dims=2))
+    end
 
     if preprocess
         structure_mask, element_mask, new_idxs = preprocess_optimization(M, [i])
@@ -147,13 +153,11 @@ function minenergy_design(M, i; yield, max_ϕ, Zs, preprocess=true, max_steps=10
         if !isempty(missing_pars)
             nμ = nμ - sum(missing_pars .<= nμ)
         end
+
+        Zs = Zs[structure_mask]
     end
 
     _, npars = size(M)
-
-    if preprocess
-        Zs = Zs[structure_mask]
-    end
 
     if npars > 1
         x = Variable(npars)
@@ -185,36 +189,40 @@ function minenergy_design(M, i; yield, max_ϕ, Zs, preprocess=true, max_steps=10
         end
     end
 
+    if equal_energies
+        xi = [xi[1:np]; xi[end] * ones(nb)]
+    end
+
     return infapprox(xi, infval), residual
 end
 
-function convex_multidesign(M, idxs; relative_yields=ones(length(idxs)), max_ε=1, max_ϕ=1, Zs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
-    nμ = n_species(M)
-    npars = size(M, 2)
+# function convex_multidesign(M, idxs; relative_yields=ones(length(idxs)), max_ε=1, max_ϕ=1, Zs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+#     nμ = n_species(M)
+#     npars = size(M, 2)
 
-    i = first(idxs)
-    j = idxs[2]
-    x = Variable(npars)
-    A = M .- M[i, :]'
-    A = A[1:end .!= i, :]
-    s = Zs[1:end .!= i] ./ Zs[i]
-    ns = sum(M[:, 1:nμ]; dims=2)
-    dMs = M[[i], :] .- M[idxs[2:end], :]
-    rs = log.(relative_yields[1] .* Zs[idxs[2:end]]) .- log.(relative_yields[2:end] * Zs[i])
+#     i = first(idxs)
+#     j = idxs[2]
+#     x = Variable(npars)
+#     A = M .- M[i, :]'
+#     A = A[1:end .!= i, :]
+#     s = Zs[1:end .!= i] ./ Zs[i]
+#     ns = sum(M[:, 1:nμ]; dims=2)
+#     dMs = M[[i], :] .- M[idxs[2:end], :]
+#     rs = log.(relative_yields[1] .* Zs[idxs[2:end]]) .- log.(relative_yields[2:end] * Zs[i])
 
-    c = Convex.logsumexp(A * x + log.(s))
-    phi = Convex.logsumexp(M * x + log.(Zs) + log.(ns))
-    problem = minimize(c,
-                        phi <= log(max_ϕ),
-                        sum(x[(nμ + 1):end]) == max_ε * (npars - nμ),
-                        dMs * x == rs) 
+#     c = Convex.logsumexp(A * x + log.(s))
+#     phi = Convex.logsumexp(M * x + log.(Zs) + log.(ns))
+#     problem = minimize(c,
+#                         phi <= log(max_ϕ),
+#                         sum(x[(nμ + 1):end]) == max_ε * (npars - nμ),
+#                         dMs * x == rs) 
     
-    Convex.solve!(problem,
-            Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,
-                                                "eps_abs" => atol, "eps_rel" => rtol,
-                                                "max_iters" => max_steps))
-    xi = vec(x.value)
-    residual = problem.optval
+#     Convex.solve!(problem,
+#             Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,
+#                                                 "eps_abs" => atol, "eps_rel" => rtol,
+#                                                 "max_iters" => max_steps))
+#     xi = vec(x.value)
+#     residual = problem.optval
 
-    return infapprox(xi, infval), residual
-end
+#     return infapprox(xi, infval), residual
+# end
