@@ -33,35 +33,49 @@ monomer_densities(ϕs, εs, M, Zs; solve_kwargs...) = monomer_densities([μs_of_
 #     end
 # end
 
-function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=1_000_000)
-    if any(<(-atol), ϕs)
+function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=1_000_000, infval=10*maximum(εs))
+    if any(<(0), ϕs)
         throw(ArgumentError("Particle concentrations cannot be negative."))
     end
+    ns = length(Zs)
     nμ = length(ϕs)
-    N = M[:, 1:nμ]
-    B = M[:, nμ+1:end]
+    μrange = findall(ϕs .> 0)
 
-    logNs = [log.(N[N[:, i] .> 0, i]) for i in 1:nμ]
-    Ns = [N[N[:, i] .> 0, :] for i in 1:nμ]
-    Bs = [B[N[:, i] .> 0, :] for i in 1:nμ]
-    logZs = [log.(Zs[N[:, i] .> 0]) for i in 1:nμ]
-
-    logϕplus1(μs, εs, i) = LogExpFunctions.logsumexp([0; logNs[i] .+ logZs[i] .+ Ns[i]*μs .+ Bs[i]*εs])
-    f(μs, εs) = [logϕplus1(μs, εs, i) - log(ϕs[i] + 1) for i in 1:nμ] 
-    
-    init_μs = -1.1 * mean(εs) * ones(nμ)
-    prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
-    solution = solve(prob, TrustRegion(); maxiters)
-
-    if solution.retcode == ReturnCode.Success
-        return Vector(solution.u)
-    elseif solution.retcode == ReturnCode.Stalled
-        @warn "solution status stalled, proceed with care"
-        return Vector(solution.u)
+    if length(μrange) != nμ
+        μforbid = setdiff(1:nμ, μrange)
+        strrange = findall(vec(reduce(*, M[:, μforbid] .== 0; dims=2)))
     else
-        @error "solution status $(solution.retcode)"
-        return fill(Missing, nμ)
+        strrange = 1:ns
     end
+
+    N = M[strrange, μrange]
+    B = M[strrange, nμ+1:end]
+    Zs = Zs[strrange]
+
+    logNs = [log.(N[N[:, i] .> 0, i]) for i in μrange]
+    Ns = [N[N[:, i] .> 0, :] for i in μrange]
+    Bs = [B[N[:, i] .> 0, :] for i in μrange]
+    logZs = [log.(Zs[N[:, i] .> 0]) for i in μrange]
+
+    logϕ(μs, εs, i) = LogExpFunctions.logsumexp(@views logNs[i] .+ logZs[i] .+ Ns[i]*μs .+ Bs[i]*εs)
+    f(μs, εs) = [logϕ(μs, εs, i) - log(ϕs[i]) for i in μrange] 
+    
+    init_μs = -1.1 * maximum(εs) * ones(length(μrange))
+    prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
+    solution = solve(prob; maxiters)
+
+    if solution.retcode != ReturnCode.Success && solution.retcode != ReturnCode.Stalled
+        @error "solution status $(solution.retcode)"
+    end
+
+    μs = -infval * ones(nμ)
+    μs[μrange] .= solution.u
+
+    if solution.retcode == ReturnCode.Stalled
+        @warn "solution status stalled, proceed with care"
+    end
+
+    return μs
 end
 
 function logyields(ξ, M, Zs)
@@ -69,6 +83,8 @@ function logyields(ξ, M, Zs)
     log_ρtot = LogExpFunctions.logsumexp(log_ρs)
     return log_ρs .- log_ρtot
 end
+logyields(ϕs, εs, M, Zs; solve_kwargs...) = logyields([μs_of_ϕs(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
+
 yields(ξ, M, Zs) = exp.(logyields(ξ, M, Zs))
 yields(ϕs, εs, M, Zs; solve_kwargs...) = yields([μs_of_ϕs(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
 
