@@ -135,6 +135,59 @@ function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, m
     return infapprox(xi, infval), residual
 end
 
+function minenergy_design(M, i; yield, max_ϕ, Zs, preprocess=true, max_steps=100_000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+    nμ = n_species(M)
+
+    if preprocess
+        structure_mask, element_mask, new_idxs = preprocess_optimization(M, [i])
+        M = M[structure_mask, element_mask]
+        i = new_idxs[1]
+
+        missing_pars = findall(.!element_mask)
+        if !isempty(missing_pars)
+            nμ = nμ - sum(missing_pars .<= nμ)
+        end
+    end
+
+    _, npars = size(M)
+
+    if preprocess
+        Zs = Zs[structure_mask]
+    end
+
+    if npars > 1
+        x = Variable(npars)
+        A = M .- M[i, :]'
+        A = A[1:end .!= i, :]
+        s = Zs[1:end .!= i] / Zs[i] 
+        ns = sum(M[:, 1:nμ]; dims=2)
+
+        R = Convex.logsumexp(A * x + log.(s))
+        phi = Convex.logsumexp(M * x + log.(Zs) + log.(ns))
+        problem = minimize(sum(x[(nμ + 1):end]),
+                           phi <= log(max_ϕ),
+                           R <= log(1/yield - 1))
+
+        Convex.solve!(problem,
+               Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,
+                                                  "eps_abs" => atol, "eps_rel" => rtol,
+                                                  "max_iters" => max_steps))
+        xi = vec(x.value)
+        residual = problem.optval
+    else
+        xi = [0.0]
+        residual = -Inf
+    end
+
+    if preprocess
+        for mi in missing_pars
+            insert!(xi, mi, -Inf)
+        end
+    end
+
+    return infapprox(xi, infval), residual
+end
+
 function convex_multidesign(M, idxs; relative_yields=ones(length(idxs)), max_ε=1, max_ϕ=1, Zs=nothing, preprocess=true, max_steps=1000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
     nμ = n_species(M)
     npars = size(M, 2)
