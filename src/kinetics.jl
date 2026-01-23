@@ -244,7 +244,7 @@ function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=In
     saveat = saveat ./ tscale
 
     prob = ODEProblem(step, ρ0, Ts)
-    sol = solve(prob, Rodas5P(); saveat=saveat)
+    sol = solve(prob, Rodas5(); saveat=saveat)
 
     ts = sol.t * tscale
     us = reduce(hcat, sol.u * ρscale)
