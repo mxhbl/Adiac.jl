@@ -150,12 +150,16 @@ function generate_reactionnetwork(strs; maxlevel, aggkernel=nothing, brkkernel=a
     return reactions, ks, fs
 end
 
-function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=kernel, k0=1)
+function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=kernel)
     strs = polygen(assembly_system)
     M = compositions(strs, assembly_system)
 
+    log_ρs = logdensities(ξ, M, Zs)
+
     reactions, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
-    ρs = densities(ξ, M, Zs)
+    fs = [fs[r] * exp(log_ρs[i] + log_ρs[j] - log_ρs[k]) for (r, (i,j,k)) in enumerate(reactions)]
+    kscale = StatsBase.geomean(fs)
+    fs /= kscale
 
     function update_step!(du, u, p, t)
         du .= 0
@@ -163,8 +167,8 @@ function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=ke
         for r in eachindex(reactions)
             i, j, k = reactions[r]
 
-            Ka = k0 * ks[r] * u[i] * u[j]
-            Kb = k0 * fs[r] * (ρs[i] * ρs[j] / ρs[k]) * u[k]
+            Ka = ks[r] * u[i] * u[j]
+            Kb = fs[r] * u[k]
 
             Rij = Kb - Ka # We don't need a factor of 2 for i == j, because we add it twice in that case!
             Rk = Ka - Kb
@@ -175,7 +179,7 @@ function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=ke
         end
         return
     end
-    return update_step!
+    return update_step!, kscale
 end
 
 # function stochastic_network(strs, assembly_system; aggkernel=nothing, brkkernel=nothing, maxbonds)
@@ -226,16 +230,24 @@ end
 #     return update_step!
 # end
 
-function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, k0=1, saveat=[])
-    step = kinetic_network(sys, ξ, Zs; kernel, brkkernel, maxbonds, k0)
+function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, saveat=[])
+    np = size(sys)[1]
     M = compositions(polygen(sys), sys)
+    nstr = size(M, 1)
 
-    ϕ0 = monomer_densities(ξ, M, Zs)
-    prob = ODEProblem(step, vcat(ϕ0, zeros(size(M, 1) - length(ϕ0))), Ts ./ k0)
-    sol = solve(prob, Rodas5(); saveat=saveat/k0)
+    step, kscale = kinetic_network(sys, ξ, Zs; kernel, brkkernel, maxbonds)
+    tscale = inv(kscale)
+    ρscale = kscale
 
-    ts = sol.t * k0
-    us = reduce(hcat, sol.u)
+    ρ0 = vcat(monomer_densities(ξ, M, Zs), zeros(nstr - np)) / ρscale
+    Ts = Ts ./ tscale
+    saveat = saveat ./ tscale
+
+    prob = ODEProblem(step, ρ0, Ts)
+    sol = solve(prob, Rodas5P(); saveat=saveat)
+
+    ts = sol.t * tscale
+    us = reduce(hcat, sol.u * ρscale)
     return us, ts
 end
 
