@@ -135,7 +135,7 @@ function convex_design(M, i; max_ε=1, max_ϕ=1, σs=nothing, preprocess=true, m
     return infapprox(xi, infval), residual
 end
 
-function minenergy_design(M, i; yield, max_ϕ, Zs, equal_energies=false, preprocess=true, max_steps=100_000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
+function minenergy_design(M, i; yield, ϕs, Zs, equal_energies=false, preprocess=true, max_steps=100_000, atol=1e-6, rtol=1e-6, verbose=0, infval=100)
     np = n_species(M)
     nb = size(M, 2) - np
     nμ = np
@@ -153,24 +153,36 @@ function minenergy_design(M, i; yield, max_ϕ, Zs, equal_energies=false, preproc
         if !isempty(missing_pars)
             nμ = nμ - sum(missing_pars .<= nμ)
         end
+        if !isa(ϕs, Number)
+            ϕs = ϕs[element_mask[1:np]]
+        end
 
         Zs = Zs[structure_mask]
     end
 
     _, npars = size(M)
 
+    ϕtot = sum(ϕs)
+
     if npars > 1
         x = Variable(npars)
         A = M .- M[i, :]'
         A = A[1:end .!= i, :]
         s = Zs[1:end .!= i] / Zs[i] 
-        ns = sum(M[:, 1:nμ]; dims=2)
+
+        phi = if ϕs isa Number
+            N = sum(M[:, 1:nμ]; dims=2)
+            [Convex.logsumexp(M * x + log.(Zs) + log.(N)) <= log(ϕtot)]
+        else
+            contain_idxs = [M[:, i] .!= 0 for i in 1:nμ]
+            [Convex.logsumexp(M[contain_idxs[i], :] * x + log.(Zs[contain_idxs[i]]) + log.(M[contain_idxs[i], i])) <= log(ϕs[i]) for i in 1:nμ]
+        end
 
         R = Convex.logsumexp(A * x + log.(s))
-        phi = Convex.logsumexp(M * x + log.(Zs) + log.(ns))
+        # phi = Convex.logsumexp(M * x + log.(Zs) + log.(ns))
         problem = minimize(sum(x[(nμ + 1):end]),
-                           phi <= log(max_ϕ),
-                           R <= log(1/yield - 1))
+                           R <= log(1/yield - 1),
+                           phi...)
 
         Convex.solve!(problem,
                Convex.MOI.OptimizerWithAttributes(SCS.Optimizer, "verbose" => verbose,

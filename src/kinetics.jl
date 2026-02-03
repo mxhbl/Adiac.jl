@@ -230,7 +230,7 @@ end
 #     return update_step!
 # end
 
-function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, saveat=[])
+function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, ρ0=nothing, saveat=[])
     np = size(sys)[1]
     M = compositions(polygen(sys), sys)
     nstr = size(M, 1)
@@ -239,7 +239,11 @@ function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=In
     tscale = inv(kscale)
     ρscale = kscale
 
-    ρ0 = vcat(monomer_densities(ξ, M, Zs), zeros(nstr - np)) / ρscale
+    if isnothing(ρ0)
+        ρ0 = vcat(monomer_densities(ξ, M, Zs), zeros(nstr - np))
+    end
+    
+    ρ0 /= ρscale
     Ts = Ts ./ tscale
     saveat = saveat ./ tscale
 
@@ -424,17 +428,13 @@ function stability_matrix(assembly_system; symmetrize=false, kernel, brkkernel=k
     end
 end
 
-function τc(S; np, thresh=1e-12)
+function τc(S; np)
     ns = size(S, 1)
 
-    C = maximum(S)
+    C = maximum(abs, S)
     S = S / C
 
-    # λ = maximum(real, schur(S).values * C)
     λ = partialsort!(schur(S).values * C, ns-np, by=real)
-    # if imag(λ) > thresh
-    #     @warn "correlation time calculation leads to complex result, which have been clipped"
-    # end
     return -inv(real(λ))
 end
 
