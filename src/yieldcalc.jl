@@ -48,17 +48,17 @@ function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=1_000_000, i
         strrange = 1:ns
     end
 
-    N = M[strrange, μrange]
+    N = M[strrange, 1:nμ]
     B = M[strrange, nμ+1:end]
     Zs = Zs[strrange]
 
     logNs = [log.(N[N[:, i] .> 0, i]) for i in μrange]
-    Ns = [N[N[:, i] .> 0, :] for i in μrange]
+    Ns = [N[N[:, i] .> 0, μrange] for i in μrange]
     Bs = [B[N[:, i] .> 0, :] for i in μrange]
     logZs = [log.(Zs[N[:, i] .> 0]) for i in μrange]
 
     logϕ(μs, εs, i) = LogExpFunctions.logsumexp(@views logNs[i] .+ logZs[i] .+ Ns[i]*μs .+ Bs[i]*εs)
-    f(μs, εs) = [logϕ(μs, εs, i) - log(ϕs[i]) for i in μrange] 
+    f(μs, εs) = [logϕ(μs, εs, i) - log(ϕs[μrange[i]]) for i in eachindex(μrange)] 
     
     init_μs = -1.1 * maximum(εs) * ones(length(μrange))
     prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
