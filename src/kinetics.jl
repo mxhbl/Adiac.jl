@@ -173,53 +173,6 @@ function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=ke
     return update_step!
 end
 
-# function stochastic_network(strs, assembly_system; aggkernel=nothing, brkkernel=nothing, maxbonds)
-#     reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
-
-#     function reaction_weight(r, dir, u, p)
-#         i, j, k = reactions[r]
-#         bs = bonds[r]
-#         sym = symfacs[r]
-#         V, εs = p[1], @view p[2:end]
-
-#         if dir == 1
-#             pref = i != j ? 1.0 : (u[i] > 1 ? 1.0 : 0.0)
-#             return inv(V) * pref * ks[r] * u[i] * u[j]
-#         elseif dir == 2
-#             return 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k] / sym
-#         end
-#         error()
-#         return 
-#     end
-
-#     ws = zeros(length(reactions), 2)
-
-#     function update_step!(rng, u, p, t)    
-#         for r in eachindex(reactions), d in (1, 2)
-#             ws[r, d] = reaction_weight(r, d, u, p)
-#         end
-
-#         wsum = sum(ws)
-#         τ = inv(wsum) * log(inv(rand(rng)))
-
-#         ci = sample(rng, vec(CartesianIndices(ws)), Weights(vec(ws), wsum))
-#         r, dir = ci[1], ci[2]
-#         i, j, k = reactions[r]
-#         if dir == 1 
-#             u[i] -= 1
-#             u[j] -= 1
-#             u[k] += 1
-#         elseif dir == 2
-#             u[i] += 1
-#             u[j] += 1
-#             u[k] -= 1
-#         else
-#             error()
-#         end
-#         return τ
-#     end
-#     return update_step!
-# end
 
 function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, k0=1, saveat=[])
     step = kinetic_network(sys, ξ, Zs; kernel, brkkernel, maxbonds, k0)
@@ -234,31 +187,6 @@ function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=In
     return us, ts
 end
 
-# function stochastic_simulate(strs, assembly_system, u0, Ts, p; aggkernel=nothing, brkkernel=nothing, maxbonds=Inf, rng=Random.default_rng(), nsteps=100_000, cinterval=max(nsteps÷100, 1))
-#     step = stochastic_network(strs, assembly_system; aggkernel, brkkernel, maxbonds)
-
-#     ts = zeros(nsteps ÷ cinterval)
-#     us = zeros(Int, length(u0), nsteps ÷ cinterval)
-
-#     u = copy(u0)
-#     us[:, 1] .= u
-
-#     t = ts[1] = Ts[1]
-#     for i in 2:nsteps
-#         dt = step(rng, u, p, t)
-#         t += dt
-#         if i % cinterval == 0
-#             us[:, i÷cinterval] .= u
-#             ts[i÷cinterval] = t
-#         end
-#         if t >= Ts[2]
-#             ts = ts[1:i÷cinterval]
-#             us = us[:, 1:i÷cinterval]
-#             break
-#         end
-#     end
-#     return us, ts
-# end
 
 function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbonds)
     strs = polygen(assembly_system)
@@ -398,36 +326,3 @@ function ∂τc(S, ∂S; np, thresh=1e-12)
     ∂τ = real.(∂λ) / real(λ)^2
     return ∂τ
 end
-
-
-# function reactionweights(ξ, strs, sys; ρs=nothing, aggkernel=nothing, brkkernel=nothing, maxbonds=Inf)
-#     np, nb = size(sys)
-
-#     reactions, bonds, symmetry_factors, ks, fs = generate_reactionnetwork(strs, sys; maxlevel=maxbonds, aggkernel, brkkernel)
-#     M = compositions(strs, sys)
-#     Zs = 8π^2 * inv.(s.σ for s in strs)
-
-#     if isnothing(ρs)
-#         ρs = densities(ξ, M, Zs)
-#     end
-    
-#     function reaction_weight(r)
-#         i, j, k = reactions[r]
-#         bs = bonds[r]
-#         sym = symmetry_factors[r]
-
-#         δ = exp(sum(-ξ[b + np] for b in bs))
-
-#         fwd_rate = ks[r] * ρs[i] * ρs[j] 
-#         bwd_rate = δ * fs[r] * ρs[k] / sym
-#         return (fwd_rate, bwd_rate)
-#     end
-
-#     ws = zeros(length(reactions), 2)
-
-#     for r in eachindex(reactions)
-#         ws[r, :] .= reaction_weight(r)
-#     end
-
-#     return reactions, ws
-# end
