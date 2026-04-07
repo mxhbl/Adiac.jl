@@ -139,16 +139,11 @@ function Uintegral_expand(A::AbstractMatrix)
     # b = (σs[1] - σs[2]) / 2
     # c = σs[3] * sdet
 
+    return ϕd_approx([x, y, z])
+end
+function ϕd_approx(σs::AbstractVector)
+    x, y, z = σs
     return (2π)^(3/2) * exp((x + y + z)) / sqrt((x+y)*(y+z)*(x+z))
-    # sdet = sign(det(A))
-    # top = exp(a + b + c)
-
-    # bot1 = ((a + b) * (a + c) * (b + c))^(1/3)
-    # bot2 = (abs(a - b) * abs(a - c) * abs(b - c))^(1/6)
-    # # bot = sqrt((a+b) * abs(a - b) * (a+c))
-
-    # return sqrt(2π)^3 * top / (bot1 * bot2)
-
 end
 
 function Uintegral(A::AbstractMatrix; kwargs...)
@@ -169,6 +164,23 @@ function Uintegral_test(A; kwargs...)
     res = solve(prob, HCubatureJL(); kwargs...)
     return res.u
 end
+function Rmean_test(A; kwargs...)
+    f(x, p) = R(x) * exp(tr(A * R(x))) * sin(x[2])
+    prob = IntegralProblem(f, zeros(3), [2π, π, 2π])
+    res = solve(prob, HCubatureJL(); kwargs...)
+    return res.u / Uintegral(A; kwargs...)
+end
+
+function outer(R)
+    return [R[i,j] * R[k,l] for i in 1:3, j in 1:3, k in 1:3, l in 1:3]
+end
+function Rvar_test(A; kwargs...)
+    f(x, p) = outer(R(x)) * exp(tr(A * R(x))) * sin(x[2])
+    prob = IntegralProblem(f, zeros(3), [2π, π, 2π])
+    res = solve(prob, HCubatureJL(); kwargs...)
+    return res.u / Uintegral(A; kwargs...)
+end
+
 function Rintegral_test(A; kwargs...)
     f(x, p) = R(x) * exp(tr(A * R(x))) * sin(x[2])
     prob = IntegralProblem(f, zeros(3), [2π, π, 2π])
@@ -248,13 +260,7 @@ begin
 end
 
 begin
-    d = 0.5 
-    r = 1
-    A = [d d;
-        -r/2 r/2]
-    k = 1
-
-    energy_fn, resh = make_dimerenergy(A; k)
+    energy_fn, resh = make_dimerenergy(A, A[:, [2, 1]]; k)
     eflat = x->energy_fn(resh(x)...)
     Ω_truth = entropy_direct(A, k; V=10)
 
@@ -374,7 +380,7 @@ end
 
 function map_potential(bond_potential::Function, p::Polyform, sys::AssemblySystem)
     n = size(p)
-    es = exterior_edges(p.anatomy)
+    es = Adiac.exterior_edges(p.anatomy)
     bonds = ((Roly.vertex2particle(p, sys, e.src), Roly.vertex2particle(p, sys, e.dst)) for e in es)
     geoms = sys.geometries
     spcs = Roly.species(p)
@@ -466,10 +472,10 @@ begin
     sys = AssemblySystem(rules, UnitSquareGeometry)
 
     strs = polygen(sys; maxsize=10)
-    s = strs[findmax(s->length(exterior_edges(s.anatomy)), strs)[2]]
+    s = strs[findmax(s->length(Adiac.exterior_edges(s.anatomy)), strs)[2]]
 
     np = size(s)
-    nb = length(exterior_edges(s.anatomy))
+    nb = length(Adiac.exterior_edges(s.anatomy))
 end
 
 begin
@@ -486,4 +492,54 @@ begin
 
     2π * (entropy_dimer(A, k)/(2π))^(np-1), 2π * (entropy_dimer_taylor(A, k)/(2π))^(np-1)
     entropy_laplace(en_s, ξ), entropy_meanfield(np, np; K, σ)
+end
+######
+
+begin
+    # rules = [1 3 2 1; 2 4 1 1] #; 3 2 1 4; 3 1 1 4; 3 3 1 4; 3 4 1 4]
+    rules = [1 1 1 2]
+    sys = AssemblySystem(rules, UnitSquareGeometry)
+
+    strs = polygen(sys; maxsize=10)
+    s = strs[end]
+end
+
+begin
+    n = 100
+    σ = 1.
+    A = stack([σ/2, y] for y in range(-σ/2, σ/2; length=n))
+    B = A .- [σ, 0]
+    k = 10 / n
+    K = k * n
+    energy_fn, reshape_fn = make_dimerenergy(A, B; k)
+
+    en_s = map_potential(energy_fn, s, sys)
+    ξ = combinecoords(s.xs, s.ψs)
+
+   (2π * (entropy_dimer(A, k) / (2π))^3 / 20) / entropy_laplace(en_s, ξ)
+end
+
+function entropy_MC(s, sys, A, B, k; V)
+    n = size(s)
+    D = size(A, 1)
+    L = V^inv(D)
+    L = 4
+    Φ = 1
+
+    _energy_fn, _ = make_dimerenergy(A, B; k)
+    energy_fn = map_potential(_energy_fn, s, sys)
+    reshape_coords(x) = reshape(x, 3, n-1)
+
+    f(x, p) = let x=reshape_coords(x)
+        exp(-energy_fn(hcat(zeros(eltype(x), 3), x)))
+    end
+
+    ξ0 = combinecoords(s.xs, s.ψs)
+    ξ0 = ξ0[:, 2:end] .- ξ0[:, 1]
+
+    bounds = (vec(ξ0) + repeat([-L/2, -L/2, -Φ], n-1), vec(ξ0) + repeat([L/2, L/2, Φ], n-1))
+    prob = IntegralProblem(f, bounds)
+
+    res = solve(prob, VEGASMC(niter=50, neval=3e6, print=1), reltol=1e-3, abstol=1e-3)
+    return res.u
 end
