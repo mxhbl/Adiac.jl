@@ -118,18 +118,18 @@ function entropy2d_expand(A, k)
     return (2π)^2/K * sqrt(2π/t)
 end
 
-begin
-    ls = 0:0.1:5
-    A = randn(3, 3)
-    # A = A * sign(det(A))
+# begin
+#     ls = 0:0.1:5
+#     A = randn(3, 3)
+#     # A = A * sign(det(A))
 
-    exacts = [Uintegral(l * A) for l in ls]
-    expands = [Uintegral_expand(l * A) for l in ls]
+#     exacts = [Uintegral(l * A) for l in ls]
+#     expands = [Uintegral_expand(l * A) for l in ls]
 
-    lines(ls, exacts ./ expands)
-    ylims!(0, 2)
-    current_figure()
-end
+#     lines(ls, exacts ./ expands)
+#     ylims!(0, 2)
+#     current_figure()
+# end
 
 function Uintegral_expand(A::AbstractMatrix)
     x, y, z = svdvals(A)
@@ -392,16 +392,16 @@ function map_potential(bond_potential::Function, p::Polyform, sys::AssemblySyste
         size(ξs) == (3, n) || throw(ArgumentError("Invalid coordinates"))
         E = 0
         for ((i, si), (j, sj)) in bonds
-            xi0, ψi0 = p.xs[i], p.ψs[i].θ
-            xj0, ψj0 = p.xs[j], p.ψs[j].θ
+            xi0, ψi0 = p.xs[i], p.ψs[i].θ * π
+            xj0, ψj0 = p.xs[j], p.ψs[j].θ * π
 
             Δϕ = atan((xj0 - xi0)[2], (xj0 - xi0)[1])
 
             Ri = R(ψi0)
             Rj = R(ψj0)
 
-            xi, ψi = @views ξs[1:d, i], ξs[d+1:end, i]
-            xj, ψj = @views ξs[1:d, j], ξs[d+1:end, j]
+            xi, ψi = @views ξs[1:d, i], ξs[d+1:end, i] * π
+            xj, ψj = @views ξs[1:d, j], ξs[d+1:end, j] * π
 
             E += bond_potential(xi, inv(Angle(ψi0)) * Angle(ψi), xi + R(Δϕ)' * (xj - xi), inv(Angle(ψj0)) * Angle(ψj))
         end
@@ -432,18 +432,24 @@ function entropy_laplace(energy_fn, ξ0; tether=1e-12)
     H = ForwardDiff.hessian(energy_fn, ξ0 .+ tether)[4:end, 4:end]
     λs = eigvals(H)
     S_vib = -0.5 * sum(log, λs / (2π); init=0)
-    return 2π * exp(S_vib)
+    return 2π * exp(S_vib) * π^(n-1)
 end
 
-function entropy_dimer(A, k)
+function entropy_dimer(A, B, k)
+    size(A, 1) == 2 || error()
     n = size(A, 2)
     K = k*n
 
     abar = k * sum(A, dims=2) / K
-    C = k * (A .- abar) * (A .- abar)'
+    bbar = k * sum(B, dims=2) / K
 
-    t = tr(C)
-    return (2π)^3/K * exp(-t) * besseli(0, t)
+    S_aa = k * (A .- abar) * (A .- abar)' / K
+    S_bb = k * (B .- bbar) * (B .- bbar)' / K
+    S_ab = k * (A .- abar) * (B .- bbar)' / K
+
+    Δ = S_ab[1, 2] - S_ab[2, 1]
+
+    return (2π)^3/K * exp(-K * (tr(S_aa) + tr(S_bb)) / 2) * besseli(0, K * sqrt(tr(S_ab)^2 + Δ^2))
 end
 
 function entropy_dimer_taylor(A, k)
@@ -490,7 +496,7 @@ begin
     en_s = map_potential(energy_fn, s, sys)
     ξ = combinecoords(s.xs, s.ψs)
 
-    2π * (entropy_dimer(A, k)/(2π))^(np-1), 2π * (entropy_dimer_taylor(A, k)/(2π))^(np-1)
+    2π * (entropy_dimer(A, B, k)/(2π))^(np-1), 2π * (entropy_dimer_taylor(A, k)/(2π))^(np-1)
     entropy_laplace(en_s, ξ), entropy_meanfield(np, np; K, σ)
 end
 ######
@@ -501,7 +507,7 @@ begin
     sys = AssemblySystem(rules, UnitSquareGeometry)
 
     strs = polygen(sys; maxsize=10)
-    s = strs[end]
+    s = strs[4]
 end
 
 begin
@@ -509,37 +515,41 @@ begin
     σ = 1.
     A = stack([σ/2, y] for y in range(-σ/2, σ/2; length=n))
     B = A .- [σ, 0]
-    k = 10 / n
+    k = 100 / n
     K = k * n
     energy_fn, reshape_fn = make_dimerenergy(A, B; k)
 
     en_s = map_potential(energy_fn, s, sys)
     ξ = combinecoords(s.xs, s.ψs)
 
-   (2π * (entropy_dimer(A, k) / (2π))^3 / 20) / entropy_laplace(en_s, ξ)
+   (2π * (entropy_dimer_taylor(A, k) / (2π))^(size(s)-1) / 4) / entropy_laplace(en_s, ξ)
 end
 
-function entropy_MC(s, sys, A, B, k; V)
+function entropy_MC(s, sys, A, B, k;)
     n = size(s)
-    D = size(A, 1)
-    L = V^inv(D)
-    L = 4
-    Φ = 1
 
     _energy_fn, _ = make_dimerenergy(A, B; k)
     energy_fn = map_potential(_energy_fn, s, sys)
     reshape_coords(x) = reshape(x, 3, n-1)
 
+    ξ = combinecoords(s.xs, s.ψs)
+    ξ_com = ξ[:, 1]
+    ξ0 = ξ[:, 2:end] .- ξ_com
+
     f(x, p) = let x=reshape_coords(x)
-        exp(-energy_fn(hcat(zeros(eltype(x), 3), x)))
+        2π * exp(-energy_fn(ξ_com .+ hcat(zeros(eltype(x), size(x, 1)), x))) * π^(n-1)
     end
-
-    ξ0 = combinecoords(s.xs, s.ψs)
-    ξ0 = ξ0[:, 2:end] .- ξ0[:, 1]
-
-    bounds = (vec(ξ0) + repeat([-L/2, -L/2, -Φ], n-1), vec(ξ0) + repeat([L/2, L/2, Φ], n-1))
+    
+    bounds = (vec(ξ0) + repeat([-Inf, -Inf, -1], n-1), vec(ξ0) + repeat([Inf, Inf, 1], n-1))
     prob = IntegralProblem(f, bounds)
 
-    res = solve(prob, VEGASMC(niter=50, neval=3e6, print=1), reltol=1e-3, abstol=1e-3)
-    return res.u
+    # res = solve(prob, VEGASMC(solver=:vegas, niter=10, neval=1e7, print=1), reltol=1e-5, abstol=1e-5)
+    res = solve(prob, HCubatureJL(; initdiv=5), reltol=1e-3, abstol=1e-5)
+    return res.u, res
+end
+
+begin
+    s = strs[4]
+    e_exact = 2π * (entropy_dimer(A, B, k) / (2π))^(size(s) - 1)
+    emc, res = entropy_MC(s, sys, A, B, k)
 end
