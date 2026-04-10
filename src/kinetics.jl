@@ -178,7 +178,7 @@ function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=ke
 end
 
 
-function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, ρ0=nothing, saveat=[], solver_kwargs...)
+function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, ρ0=nothing, alg=Rodas5(), saveat=[], abstol, solver_kwargs...)
     np = size(sys)[1]
     M = compositions(polygen(sys), sys)
     nstr = size(M, 1)
@@ -194,9 +194,10 @@ function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=In
     ρ0 /= ρscale
     Ts = Ts ./ tscale
     saveat = saveat ./ tscale
+    abstol /= ρscale
 
     prob = ODEProblem(step, ρ0, Ts)
-    sol = solve(prob, Rodas5(); saveat=saveat, solver_kwargs...)
+    sol = solve(prob, alg; saveat, abstol, solver_kwargs...)
 
     ts = sol.t * tscale
     us = reduce(hcat, sol.u * ρscale)
