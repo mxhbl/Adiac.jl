@@ -61,8 +61,8 @@ function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=1_000_000, i
     f(μs, εs) = [logϕ(μs, εs, i) - log(ϕs[μrange[i]]) for i in eachindex(μrange)] 
     
     init_μs = -1.1 * maximum(εs) * ones(length(μrange))
-    prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
-    solution = solve(prob; maxiters)
+    prob = NonlinearProblem(f, init_μs, εs)
+    solution = solve(prob; maxiters, abstol=atol, reltol=rtol)
 
     if solution.retcode != ReturnCode.Success && solution.retcode != ReturnCode.Stalled
         @error "solution status $(solution.retcode)"
