@@ -1,3 +1,28 @@
+"""
+    simulate_kinetics(strs::StructureCollection, ξ; T, [initial_densities=nothing, saveat=[]])
+
+Simulate the assembly kinetics of the structures in the structure collection `strs` as a function of  
+`ξ`, a vector containing chemical potentials and binding energies. Unless `initial_densities` is specified, 
+the initial state consists of monomers at the concentrations implied by `ξ`.
+
+Keyword arguments:
+- `T`: total simulation time.
+- `initial_densities` (optional): initial densities of all structures at t=0.
+- `saveat` (optional): time points at which the simulation state should be stored.
+
+Returns a vector of time points and a matrix of structure number densities of shape `(nstructures, ntimepoints)`.
+"""
+function simulate_kinetics(strs::StructureCollection, ξ; T, initial_densities=nothing, saveat=[])
+    _check_parameterlength(strs, ξ)
+    ts, ρs = _simulate_kinetics(strs.sys, strs.Zs, ξ; Ts=(0,T), kernel=strs.kernel, initial_densities, saveat)
+    return ts, ρs
+end
+function simulate_kinetics(strs::StructureCollection, ϕs, εs; kwargs...)
+    _check_parameterlength(strs, ϕs, εs)
+    return simulate_kinetics(strs, [μs_of_ϕs(ϕs, εs, strs.M, strs.Zs); εs]; kwargs...)
+end
+
+
 function cleave(anatomy::AbstractGraph, es::Vector{<:AbstractEdge})
     anatomy = copy(anatomy)
 
@@ -6,7 +31,6 @@ function cleave(anatomy::AbstractGraph, es::Vector{<:AbstractEdge})
         if revedge ∉ edges(anatomy)
             error("Cannot cleave a nondirected (interior) edge.")
         end
-
         rem_edge!(anatomy, edge)
         rem_edge!(anatomy, revedge)
     end
@@ -111,7 +135,6 @@ function make_kernels(reactions, cuts, components, aggkernel=nothing, brkkernel=
     return ks, fs
 end
 
-
 function generate_reactionnetwork(strs; maxlevel, aggkernel=nothing, brkkernel=aggkernel)
     gs = [s.anatomy for s in strs]
     ids = Dict(ghash(g)=>i for (i, g) in enumerate(gs))
@@ -145,12 +168,15 @@ function generate_reactionnetwork(strs; maxlevel, aggkernel=nothing, brkkernel=a
     return reactions, ks, fs
 end
 
-function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=kernel, k0=1)
+function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=kernel)
     strs = polygen(assembly_system)
     M = compositions(strs, assembly_system)
-
     reactions, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
-    ρs = densities(ξ, M, Zs)
+
+    log_ρs = logdensities(ξ, M, Zs)
+    fs = [fs[r] * exp(log_ρs[i] + log_ρs[j] - log_ρs[k]) for (r, (i,j,k)) in enumerate(reactions)]
+    kscale = StatsBase.geomean(fs)
+    fs /= kscale
 
     function update_step!(du, u, p, t)
         du .= 0
@@ -158,111 +184,48 @@ function kinetic_network(assembly_system, ξ, Zs; maxbonds, kernel, brkkernel=ke
         for r in eachindex(reactions)
             i, j, k = reactions[r]
 
-            Ka = k0 * ks[r] * u[i] * u[j]
-            Kb = k0 * fs[r] * (ρs[i] * ρs[j] / ρs[k]) * u[k]
+            Ka = ks[r] * u[i] * u[j]
+            Kb = fs[r] * u[k]
 
             Rij = Kb - Ka # We don't need a factor of 2 for i == j, because we add it twice in that case!
-            Rk = Ka - Kb
 
             du[i] += Rij
             du[j] += Rij
-            du[k] += Rk
+            du[k] -= Rij
         end
         return
     end
-    return update_step!
+    return update_step!, kscale
 end
 
-# function stochastic_network(strs, assembly_system; aggkernel=nothing, brkkernel=nothing, maxbonds)
-#     reactions, bonds, symfacs, ks, fs = generate_reactionnetwork(strs, assembly_system; maxlevel=maxbonds, aggkernel, brkkernel)
-
-#     function reaction_weight(r, dir, u, p)
-#         i, j, k = reactions[r]
-#         bs = bonds[r]
-#         sym = symfacs[r]
-#         V, εs = p[1], @view p[2:end]
-
-#         if dir == 1
-#             pref = i != j ? 1.0 : (u[i] > 1 ? 1.0 : 0.0)
-#             return inv(V) * pref * ks[r] * u[i] * u[j]
-#         elseif dir == 2
-#             return 8π^2 * exp(sum(-εs[b] for b in bs)) * fs[r] * u[k] / sym
-#         end
-#         error()
-#         return 
-#     end
-
-#     ws = zeros(length(reactions), 2)
-
-#     function update_step!(rng, u, p, t)    
-#         for r in eachindex(reactions), d in (1, 2)
-#             ws[r, d] = reaction_weight(r, d, u, p)
-#         end
-
-#         wsum = sum(ws)
-#         τ = inv(wsum) * log(inv(rand(rng)))
-
-#         ci = sample(rng, vec(CartesianIndices(ws)), Weights(vec(ws), wsum))
-#         r, dir = ci[1], ci[2]
-#         i, j, k = reactions[r]
-#         if dir == 1 
-#             u[i] -= 1
-#             u[j] -= 1
-#             u[k] += 1
-#         elseif dir == 2
-#             u[i] += 1
-#             u[j] += 1
-#             u[k] -= 1
-#         else
-#             error()
-#         end
-#         return τ
-#     end
-#     return update_step!
-# end
-
-function kinetic_simulate(sys, ξ; Zs, Ts, kernel, brkkernel=kernel, maxbonds=Inf, k0=1, saveat=[])
-    step = kinetic_network(sys, ξ, Zs; kernel, brkkernel, maxbonds, k0)
+function _simulate_kinetics(sys, Zs, ξ; Ts, kernel, brkkernel=kernel, maxbonds=Inf, initial_densities=nothing, alg=Rodas5(), saveat=[], abstol, solver_kwargs...)
+    np = size(sys)[1]
     M = compositions(polygen(sys), sys)
+    nstr = size(M, 1)
 
-    ϕ0 = monomer_densities(ξ, M, Zs)
-    prob = ODEProblem(step, vcat(ϕ0, zeros(size(M, 1) - length(ϕ0))), Ts ./ k0)
-    sol = solve(prob, Rodas5(); saveat=saveat/k0)
+    step, kscale = kinetic_network(sys, ξ, Zs; kernel, brkkernel, maxbonds)
+    tscale = inv(kscale)
+    ρscale = kscale
 
-    ts = sol.t * k0
-    us = reduce(hcat, sol.u)
-    return us, ts
+    if isnothing(initial_densities)
+        initial_densities = vcat(particle_densities(ξ, M, Zs), zeros(nstr - np))
+    end
+    
+    initial_densities /= ρscale
+    Ts = Ts ./ tscale
+    saveat = saveat ./ tscale
+    abstol /= ρscale
+
+    prob = ODEProblem(step, initial_densities, Ts)
+    sol = solve(prob, alg; saveat, abstol, solver_kwargs...)
+
+    ts = sol.t * tscale
+    us = reduce(hcat, sol.u * ρscale)
+    return ts, us
 end
 
-# function stochastic_simulate(strs, assembly_system, u0, Ts, p; aggkernel=nothing, brkkernel=nothing, maxbonds=Inf, rng=Random.default_rng(), nsteps=100_000, cinterval=max(nsteps÷100, 1))
-#     step = stochastic_network(strs, assembly_system; aggkernel, brkkernel, maxbonds)
-
-#     ts = zeros(nsteps ÷ cinterval)
-#     us = zeros(Int, length(u0), nsteps ÷ cinterval)
-
-#     u = copy(u0)
-#     us[:, 1] .= u
-
-#     t = ts[1] = Ts[1]
-#     for i in 2:nsteps
-#         dt = step(rng, u, p, t)
-#         t += dt
-#         if i % cinterval == 0
-#             us[:, i÷cinterval] .= u
-#             ts[i÷cinterval] = t
-#         end
-#         if t >= Ts[2]
-#             ts = ts[1:i÷cinterval]
-#             us = us[:, 1:i÷cinterval]
-#             break
-#         end
-#     end
-#     return us, ts
-# end
-
-function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbonds)
+function stability_matrix(assembly_system; symmetrize=false, kernel, brkkernel=kernel, Zs, maxbonds)
     strs = polygen(assembly_system)
-    ns = length(strs)
 
     reactions, ks, fs = generate_reactionnetwork(strs; maxlevel=maxbonds, aggkernel=kernel, brkkernel)
     M = compositions(strs, assembly_system)
@@ -289,145 +252,130 @@ function stability_matrix(assembly_system; kernel, brkkernel=kernel, Zs, maxbond
             S[k, j] += Ka * ρeq[i] 
             S[k, k] += -Kb
         end
-        return S # TODO: remove this once other functions are fixed
+        return S 
     end
-
-    Sfn(ξ) = Sfn!(zeros(eltype(ξ), ns, ns), ξ)
 
     function ∂S∂μfn!(S, ξ)
         S .= 0
         ρeq = densities(ξ, M, Zs)
-        ∂ρeq = ∂ρ∂μ(ξ, M, Zs)
+        ∂ρeq = permutedims(∂ρ∂μ(ξ, M, Zs))
+
+        scratch = zero(ξ)
 
         for r in eachindex(reactions)
             i, j, k = reactions[r]
 
             Ka = ks[r]
-            Kb = (-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[k, :] + ∂ρeq[i, :] * ρeq[j] / ρeq[k] + ∂ρeq[j, :] * ρeq[i] / ρeq[k]) * fs[r] 
+            Kb = fs[r] 
 
-            S[i, i, :] += -Ka * ∂ρeq[j, :] 
-            S[i, j, :] += -Ka * ∂ρeq[i, :] 
-            S[i, k, :] += Kb
+            @views @. begin 
+                scratch = -Ka * ∂ρeq[:, j] 
+                S[i, i, :] += scratch
+                S[j, i, :] += scratch
+                S[k, i, :] -= scratch
 
-            S[j, i, :] += -Ka * ∂ρeq[j, :] 
-            S[j, j, :] += -Ka * ∂ρeq[i, :] 
-            S[j, k, :] += Kb
 
-            S[k, i, :] += Ka * ∂ρeq[j, :] 
-            S[k, j, :] += Ka * ∂ρeq[i, :] 
-            S[k, k, :] += -Kb
+                scratch = -Ka * ∂ρeq[:, i] 
+                S[i, j, :] += scratch
+                S[j, j, :] += scratch
+                S[k, j, :] -= scratch
+
+                scratch = Kb *(-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[:, k] + 
+                            ∂ρeq[:, i] * ρeq[j] / ρeq[k] 
+                            + ∂ρeq[:, j] * ρeq[i] / ρeq[k])
+                S[i, k, :] += scratch
+                S[j, k, :] += scratch
+                S[k, k, :] -= scratch
+            end
         end
         return S
     end
 
-    ∂S∂μfn(ξ) = ∂S∂μfn!(zeros(eltype(ξ), ns, ns, length(ξ)), ξ)
+    #####################
+    #### Return inv(D) S D, where D = sqrt(ρᵢ)
+    function Ssym_fn!(S, ξ; scale=1)
+        ρeq = densities(ξ, M, Zs)
+        ρeq_sqrt = sqrt.(ρeq)
 
+        S .= 0
+        for r in eachindex(reactions)
+            i, j, k = reactions[r]
 
-    # function ∂S∂ϕfn(ϕs, εs)
-    #     S = zeros(eltype(ϕs), ns, ns, np + nb)
-    #     ∂ρeq = ∂ρ∂ϕ(ϕs, εs, M, Zs)
+            Ka = ks[r] * scale
+            Kb = fs[r] * scale
 
-    #     for r in eachindex(reactions)
-    #         i, j, k = reactions[r]
-    #         bs = bonds[r]
-    #         sym = symfacs[r]
+            ij = ρeq_sqrt[i] * ρeq_sqrt[j] 
+            ik = ρeq_sqrt[i] / ρeq_sqrt[k] * ρeq[j]
+            jk = ρeq_sqrt[j] / ρeq_sqrt[k] * ρeq[i]
 
-    #         #TODO fix this hack
-    #         B = zeros(eltype(ϕs), np + nb)
-    #         for b in bs 
-    #             B[np+b] += 1
-    #         end
+            S[i, i] += -Ka * ρeq[j]
+            S[i, j] += -Ka * ij
+            S[i, k] += Kb * ik
 
-    #         Ka = α * ks[r] * sym
-    #         Kb = α * -rotation_factor * B * exp(sum(-εs[b] for b in bs)) * fs[r]
+            S[j, i] += -Ka * ij
+            S[j, j] += -Ka * ρeq[i]
+            S[j, k] += Kb * jk
 
-    #         S[i, i, :] += -Ka * ∂ρeq[j, :] 
-    #         S[i, j, :] += -Ka * ∂ρeq[i, :] 
-    #         S[i, k, :] += Kb
+            S[k, i] += Ka * ik
+            S[k, j] += Ka * jk
+            S[k, k] += -Kb * (ρeq[i] * ρeq[j] / ρeq[k])
+        end
+        return S
+    end
 
-    #         S[j, i, :] += -Ka * ∂ρeq[j, :] 
-    #         S[j, j, :] += -Ka * ∂ρeq[i, :] 
-    #         S[j, k, :] += Kb
+    function ∂Ssym∂μ_fn!(S, ξ; scale=1)
+        ρeq = densities(ξ, M, Zs)
+        ρeq_sqrt = sqrt.(ρeq)
+        ∂ρeq = permutedims(∂ρ∂μ(ξ, M, Zs))
 
-    #         S[k, i, :] += Ka * ∂ρeq[j, :] 
-    #         S[k, j, :] += Ka * ∂ρeq[i, :] 
-    #         S[k, k, :] += -Kb
-    #     end
-    #     return S
-    # end
+        S .= 0
+        scratch = zero(ξ)
 
-    return Sfn, ∂S∂μfn, Sfn!, ∂S∂μfn!
+        for r in eachindex(reactions)
+            i, j, k = reactions[r]
+
+            Ka = ks[r] * scale
+            Kb = fs[r] * scale
+
+            @views @. begin
+                scratch = -Ka * ((ρeq_sqrt[j] / ρeq_sqrt[i]) * ∂ρeq[:, i] + (ρeq_sqrt[i] / ρeq_sqrt[j]) * ∂ρeq[:, j]) / 2
+                S[i, j, :] += scratch
+                S[j, i, :] += scratch
+
+                # ik
+                scratch = (ρeq_sqrt[i] / ρeq_sqrt[k] * ∂ρeq[:, j] + ρeq[j] / (2ρeq_sqrt[i] * ρeq_sqrt[k]) * ∂ρeq[:, i] -
+                    ρeq_sqrt[i] * ρeq[j] / (2ρeq_sqrt[k]^3) * ∂ρeq[:, k])
+                S[i, k, :] += Kb * scratch
+                S[k, i, :] += Ka * scratch
+
+                # jk
+                scratch = (ρeq_sqrt[j] / ρeq_sqrt[k] * ∂ρeq[:, i] + ρeq[i] / (2ρeq_sqrt[j] * ρeq_sqrt[k]) * ∂ρeq[:, j] -
+                ρeq_sqrt[j] * ρeq[i] / (2ρeq_sqrt[k]^3) * ∂ρeq[:, k])
+
+                S[j, k, :] += Kb * scratch
+                S[k, j, :] += Ka * scratch
+
+                S[i, i, :] += -Ka * ∂ρeq[:, j] 
+                S[j, j, :] += -Ka * ∂ρeq[:, i] 
+                S[k, k, :] += -Kb * (-ρeq[i] * ρeq[j] / ρeq[k]^2 * ∂ρeq[:, k] + ∂ρeq[:, i] * ρeq[j] / ρeq[k] + ∂ρeq[:, j] * ρeq[i] / ρeq[k])
+            end
+        end
+        return S
+    end
+
+    if symmetrize
+        return Ssym_fn!, ∂Ssym∂μ_fn!
+    else
+        return Sfn!, ∂S∂μfn!
+    end
 end
 
-function τc(S; np, thresh=1e-12)
-    ns = size(S, 1)
-
-    C = maximum(S)
-    S = S / C
-
-    # λ = maximum(real, schur(S).values * C)
-    λ = partialsort!(schur(S).values * C, ns-np, by=real)
-    # if imag(λ) > thresh
-    #     @warn "correlation time calculation leads to complex result, which have been clipped"
-    # end
-    return -inv(real(λ))
-end
-
-function ∂τc(S, ∂S; np, thresh=1e-12)
+function τc(S; np)
     ns = size(S, 1)
 
     C = maximum(abs, S)
     S = S / C
 
-    sch = schur(complex(S))
-    λs = sch.values
-    xs = eigvecs(sch; left=false)
-    ys = eigvecs(sch; left=true)
-
-    # idx = argmax(real.(λs))
-    idx = partialsortperm(λs, ns-np, by=real)
-
-    λ, x, y = λs[idx] * C, xs[:, idx], ys[:, idx]
-
-    ∂λ = @views [dot(y, ∂S[:, :, i], x) / (y'x) for i in axes(∂S, 3)]
-    # if max(maximum(imag(∂λ)), imag(λ)) > thresh
-    #     @warn "gradient calculation leads to complex derivatives, which have been clipped"
-    #     @warn "imag = $(max(maximum(imag(∂λ)), imag(λ)))"
-    # end
-
-    ∂τ = real.(∂λ) / real(λ)^2
-    return ∂τ
+    λ = partialsort!(schur(S).values * C, ns-np, by=real)
+    return -inv(real(λ))
 end
-
-
-# function reactionweights(ξ, strs, sys; ρs=nothing, aggkernel=nothing, brkkernel=nothing, maxbonds=Inf)
-#     np, nb = size(sys)
-
-#     reactions, bonds, symmetry_factors, ks, fs = generate_reactionnetwork(strs, sys; maxlevel=maxbonds, aggkernel, brkkernel)
-#     M = compositions(strs, sys)
-#     Zs = 8π^2 * inv.(s.σ for s in strs)
-
-#     if isnothing(ρs)
-#         ρs = densities(ξ, M, Zs)
-#     end
-    
-#     function reaction_weight(r)
-#         i, j, k = reactions[r]
-#         bs = bonds[r]
-#         sym = symmetry_factors[r]
-
-#         δ = exp(sum(-ξ[b + np] for b in bs))
-
-#         fwd_rate = ks[r] * ρs[i] * ρs[j] 
-#         bwd_rate = δ * fs[r] * ρs[k] / sym
-#         return (fwd_rate, bwd_rate)
-#     end
-
-#     ws = zeros(length(reactions), 2)
-
-#     for r in eachindex(reactions)
-#         ws[r, :] .= reaction_weight(r)
-#     end
-
-#     return reactions, ws
-# end

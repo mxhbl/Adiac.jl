@@ -1,39 +1,93 @@
+"""
+    yields(strs::StructureCollection, ξ)
+
+Compute the equilibrium yields of the structures in the collection `strs` as a function of `ξ`, a vector containing 
+chemical potentials and binding energies.
+"""
+function yields(strs::StructureCollection, ξ)
+    _check_parameterlength(strs, ξ)
+    return yields(ξ, strs.M, strs.Zs)
+end
+
+"""
+    yields(strs::StructureCollection, ϕs, εs)
+
+Compute the equilibrium yields of the structures in the collection `strs` as a function of particle concentrations (`ϕs`)
+and binding energies (`εs`).
+"""
+function yields(strs::StructureCollection, ϕs, εs)
+    _check_parameterlength(strs, ϕs, εs)
+    return yields(ϕs, εs, strs.M, strs.Zs)
+end
+
+"""
+    densities(strs::StructureCollection, ξ)
+
+Compute the equilibrium number densities of the structures in the collection `strs` as a function of `ξ`, a vector containing 
+chemical potentials and binding energies.
+"""
+function densities(strs::StructureCollection, ξ)
+    _check_parameterlength(strs, ξ)
+    return densities(ξ, strs.M, strs.Zs)
+end
+
+"""
+    densities(strs::StructureCollection, ϕs, εs)
+
+Compute the equilibrium number densities of the structures in the collection `strs` as a function of particle 
+concentrations (`ϕs`) and binding energies (`εs`).
+"""
+function densities(strs::StructureCollection, ϕs, εs)
+    _check_parameterlength(strs, ϕs, εs)
+    return densities(ϕs, εs, strs.M, strs.Zs)
+end
+
+"""
+    particle_densities(strs::StructureCollection, ξ)
+
+Compute the total equilibrium number densities of each particle species used in the structure collection `strs`
+as a function of `ξ`, a vector containing chemical potentials and binding energies.
+"""
+function particle_densities(strs::StructureCollection, ξ)
+    return particle_densities(ξ, strs.M, strs.Zs)
+end
+
+"""
+    chemical_potentials(strs::StructureCollection, ϕs, εs)
+
+Compute the chemical potentials of each particle species of the used in the structure collection `strs`
+as a function of particle concentrations (`ϕs`) and binding energies (`εs`).
+"""
+function chemical_potentials(strs::StructureCollection, ϕs, εs)
+    _check_parameterlength(strs, ϕs, εs)
+    return chemical_potentials(ϕs, εs, strs.M, strs.Zs)
+end
+
+"""
+    toyields(densities)
+
+Normalize a list of number densities into yields.
+If `densities` has multiple axes, the normalization is carried out over `dims`.
+"""
+function toyields(densities; dims=1)
+    return softmax(log.(abs.(densities)); dims)
+end
+
+
 function logdensities(ξ, M, Zs)
     log_ρs = M * ξ .+ log.(Zs)
     return log_ρs
 end
 densities(ξ, M, Zs) = exp.(logdensities(ξ, M, Zs))
-densities(ϕs, εs, M, Zs; solve_kwargs...) = densities([μs_of_ϕs(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
+densities(ϕs, εs, M, Zs; solve_kwargs...) = densities([chemical_potentials(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
 
-function _monomer_densities(ξ, M, ns, Zs)
+function _particle_densities(ξ, M, ns, Zs)
     return ns' * densities(ξ, M, Zs)
 end
-monomer_densities(ξ, M, Zs) = _monomer_densities(ξ, M, view(M, :, 1:n_species(M)), Zs)
-monomer_densities(ϕs, εs, M, Zs; solve_kwargs...) = monomer_densities([μs_of_ϕs(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
+particle_densities(ξ, M, Zs) = _particle_densities(ξ, M, view(M, :, 1:n_species(M)), Zs)
+particle_densities(ϕs, εs, M, Zs; solve_kwargs...) = particle_densities([chemical_potentials(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
 
-# function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=100_000)
-#     nμ = length(ϕs)
-#     N = M[:, 1:nμ]
-#     B = M[:, nμ+1:end]
-
-#     f!, jac!, jvp!, vjp! = _setup_conversion(ϕs, N, B, Zs)
-#     f = NonlinearFunction(f!, jac=jac!, jvp=jvp!, vjp=vjp!)
-    
-#     init_μs = -1.5 * mean(εs) * ones(nμ)
-#     prob = NonlinearProblem(f, init_μs, εs, abstol=atol, reltol=rtol)
-#     solution = solve(prob; maxiters)
-
-#     if solution.retcode == ReturnCode.Success
-#         return Vector(solution.u)
-#     elseif solution.retcode == ReturnCode.Stalled
-#         @warn "solution status stalled, proceed with care"
-#         return Vector(solution.u)
-#     else
-#         return fill(Missing, nμ)
-#     end
-# end
-
-function μs_of_ϕs(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=1_000_000)
+function chemical_potentials(ϕs, εs, M, Zs; atol=1e-6, rtol=1e-6, maxiters=1_000_000)
     if any(<(-atol), ϕs)
         throw(ArgumentError("Particle concentrations cannot be negative."))
     end
@@ -70,28 +124,8 @@ function logyields(ξ, M, Zs)
     return log_ρs .- log_ρtot
 end
 yields(ξ, M, Zs) = exp.(logyields(ξ, M, Zs))
-yields(ϕs, εs, M, Zs; solve_kwargs...) = yields([μs_of_ϕs(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
+yields(ϕs, εs, M, Zs; solve_kwargs...) = yields([chemical_potentials(ϕs, εs, M, Zs; solve_kwargs...); εs], M, Zs)
 
-
-function _setup_conversion(ϕs_target, N, B, Zs)
-    function f!(dϕs, μs, εs)
-        dϕs .= N' * (exp.(N * μs + B * εs) .* Zs) - ϕs_target
-        return 
-    end
-    function jac!(J, μs, εs)
-        J .=  N' * Diagonal(exp.(N * μs + B * εs) .* Zs) * N
-        return 
-    end
-    function jvp!(Jv, v, μs, εs)
-        Jv .=  N' * Diagonal(exp.(N * μs + B * εs) .* Zs) * (N * v)
-        return 
-    end
-    function vjp!(vJ, v, μs, εs)
-        jvp!(vJ, v, μs, εs)
-        return 
-    end
-    return f!, jac!, jvp!, vjp!
-end
 
 function ∂ρ∂μ(ξ, M, Zs)
     ρs = densities(ξ, M, Zs)
@@ -141,4 +175,15 @@ function ∂ϕ∂μ(ξ, M, Zs)
     ∂ϕ∂μ =  N' * Diagonal(ρs) * N
     ∂ϕ∂ε =  N' * Diagonal(ρs) * B
     return hcat(∂ϕ∂μ, ∂ϕ∂ε)
+end
+
+function _check_parameterlength(strs, ξ)
+    length(ξ) != size(strs.M, 2) && throw(ArgumentError("The assembly system takes $(size(strs.M, 2)) parameters, but `ξ` only has length $(length(ξ))."))
+    return
+end
+
+function _check_parameterlength(strs, ϕs, εs)
+    length(ϕs) != size(strs.sys)[1] && throw(ArgumentError("The assembly system contains $(size(strs.sys)[1]) particle species, but `ϕs` only has length $(length(ϕs))."))
+    length(εs) != size(strs.sys)[2] && throw(ArgumentError("The assembly system contains $(size(strs.sys)[2]) bond types, but `εs` only has length $(length(εs))."))
+    return
 end

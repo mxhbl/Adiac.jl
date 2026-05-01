@@ -553,3 +553,8 @@ begin
     e_exact = 2π * (entropy_dimer(A, B, k) / (2π))^(size(s) - 1)
     emc, res = entropy_MC(s, sys, A, B, k)
 end
+
+
+begin
+    
+end
